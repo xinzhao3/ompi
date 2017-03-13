@@ -120,6 +120,8 @@ int mca_pml_ucx_open(void)
     ucp_context_attr_t attr;
     ucp_params_t params;
     ucp_config_t *config;
+    ucp_worker_params_t w_params;
+    ucp_worker_attr_t w_attr;
     ucs_status_t status;
 
     PML_UCX_VERBOSE(1, "mca_pml_ucx_open");
@@ -135,12 +137,14 @@ int mca_pml_ucx_open(void)
                              UCP_PARAM_FIELD_REQUEST_SIZE |
                              UCP_PARAM_FIELD_REQUEST_INIT |
                              UCP_PARAM_FIELD_REQUEST_CLEANUP |
-                             UCP_PARAM_FIELD_TAG_SENDER_MASK;
+                             UCP_PARAM_FIELD_TAG_SENDER_MASK |
+                             UCP_PARAM_FIELD_MT_WORKERS_SHARED;
     params.features        = UCP_FEATURE_TAG;
     params.request_size    = sizeof(ompi_request_t);
     params.request_init    = mca_pml_ucx_request_init;
     params.request_cleanup = mca_pml_ucx_request_cleanup;
     params.tag_sender_mask = PML_UCX_SPECIFIC_SOURCE_MASK;
+    params.mt_workers_shared = 0;
 
     status = ucp_init(&params, config, &ompi_pml_ucx.ucp_context);
     ucp_config_release(config);
@@ -160,12 +164,42 @@ int mca_pml_ucx_open(void)
 
     ompi_pml_ucx.request_size = attr.request_size;
 
+    w_params.field_mask  = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
+    if (ompi_mpi_thread_multiple) {
+        w_params.thread_mode = UCS_THREAD_MODE_MULTI;
+    } else {
+        w_params.thread_mode = UCS_THREAD_MODE_SINGLE;
+    }
+
+    status = ucp_worker_create(ompi_pml_ucx.ucp_context, &w_params,
+                               &ompi_pml_ucx.ucp_worker);
+    if (UCS_OK != status) {
+        return OMPI_ERROR;
+    }
+
+    w_attr.field_mask = UCP_WORKER_ATTR_FIELD_THREAD_MODE;
+    status = ucp_worker_query(ompi_pml_ucx.ucp_worker, &w_attr);
+    if (UCS_OK != status) {
+        ucp_worker_destroy(ompi_pml_ucx.ucp_worker);
+        ompi_pml_ucx.ucp_worker = NULL;
+        return OMPI_ERROR;
+    }
+
+    ompi_mpi_thread_multiple  = (w_attr.thread_mode == UCS_THREAD_MODE_MULTI);
+    ompi_mpi_thread_provided  = (ompi_mpi_thread_multiple == true ?
+                                 MPI_THREAD_MULTIPLE : MPI_THREAD_SINGLE);
+
     return OMPI_SUCCESS;
 }
 
 int mca_pml_ucx_close(void)
 {
     PML_UCX_VERBOSE(1, "mca_pml_ucx_close");
+
+    if (ompi_pml_ucx.ucp_worker) {
+        ucp_worker_destroy(ompi_pml_ucx.ucp_worker);
+        ompi_pml_ucx.ucp_worker = NULL;
+    }
 
     if (ompi_pml_ucx.ucp_context != NULL) {
         ucp_cleanup(ompi_pml_ucx.ucp_context);
@@ -176,21 +210,9 @@ int mca_pml_ucx_close(void)
 
 int mca_pml_ucx_init(void)
 {
-    ucp_worker_params_t params;
-    ucs_status_t status;
     int rc;
 
     PML_UCX_VERBOSE(1, "mca_pml_ucx_init");
-
-    /* TODO check MPI thread mode */
-    params.field_mask  = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
-    params.thread_mode = UCS_THREAD_MODE_SINGLE;
-
-    status = ucp_worker_create(ompi_pml_ucx.ucp_context, &params,
-                               &ompi_pml_ucx.ucp_worker);
-    if (UCS_OK != status) {
-        return OMPI_ERROR;
-    }
 
     rc = mca_pml_ucx_send_worker_address();
     if (rc < 0) {
@@ -225,11 +247,6 @@ int mca_pml_ucx_cleanup(void)
 
     OBJ_DESTRUCT(&ompi_pml_ucx.convs);
     OBJ_DESTRUCT(&ompi_pml_ucx.persistent_reqs);
-
-    if (ompi_pml_ucx.ucp_worker) {
-        ucp_worker_destroy(ompi_pml_ucx.ucp_worker);
-        ompi_pml_ucx.ucp_worker = NULL;
-    }
 
     return OMPI_SUCCESS;
 }

@@ -568,6 +568,13 @@ int ompi_mpi_init(int argc, char **argv, int requested, int *provided)
         goto error;
     }
 
+    /* Initialize MCA pml components. Since pml components may modify
+       ompi_mpi_thread_multiple, we initialize it early here */
+    if (OMPI_SUCCESS != (ret = mca_base_framework_open(&ompi_pml_base_framework, 0))) {
+        error = "mca_pml_base_open() failed";
+        goto error;
+    }
+
     /* Initialize the op framework. This has to be done *after*
        ddt_init, but befor mca_coll_base_open, since some collective
        modules (e.g., the hierarchical coll component) may need ops in
@@ -607,10 +614,6 @@ int ompi_mpi_init(int argc, char **argv, int requested, int *provided)
     }
     if (OMPI_SUCCESS != (ret = mca_bml_base_init (1, ompi_mpi_thread_multiple))) {
         error = "mca_bml_base_init() failed";
-        goto error;
-    }
-    if (OMPI_SUCCESS != (ret = mca_base_framework_open(&ompi_pml_base_framework, 0))) {
-        error = "mca_pml_base_open() failed";
         goto error;
     }
     if (OMPI_SUCCESS != (ret = mca_base_framework_open(&ompi_coll_base_framework, 0))) {
