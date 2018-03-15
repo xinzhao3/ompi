@@ -225,6 +225,11 @@ int mca_pml_ucx_init(void)
         return OMPI_ERROR;
     }
 
+    /* init jdata */
+    jdata_init();
+    ompi_pml_ucx.jdata_ctx = jdata_ctx_init(0, NULL, NULL, &(ompi_pml_ucx.ucp_worker));
+    assert(jdata_ctx != NULL);
+
     rc = mca_pml_ucx_send_worker_address();
     if (rc < 0) {
         return rc;

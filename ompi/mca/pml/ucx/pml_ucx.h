@@ -20,6 +20,7 @@
 
 #include <ucp/api/ucp.h>
 #include "pml_ucx_freelist.h"
+#include "jdata_win.h"
 
 
 typedef struct mca_pml_ucx_module           mca_pml_ucx_module_t;
@@ -49,6 +50,9 @@ struct mca_pml_ucx_module {
     int                       priority;
     int                       verbose;
     int                       output;
+
+    /* jdata objects */
+    jdata_ctx_t               *jdata_ctx;
 };
 
 extern mca_pml_base_component_2_0_0_t mca_pml_ucx_component;

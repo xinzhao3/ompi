@@ -25,6 +25,10 @@ AC_DEFUN([OMPI_CHECK_UCX],[
 		    [AC_HELP_STRING([--with-ucx(=DIR)],
 				    [Build with Unified Communication X library support])])
 	OPAL_CHECK_WITHDIR([ucx], [$with_ucx], [include/ucp/api/ucp.h])
+	AC_ARG_WITH([jdata],
+		    [AC_HELP_STRING([--with-jdata(=DIR)],
+				    [Build with jdata support])])
+	OPAL_CHECK_WITHDIR([jdata], [$with_jdata], [./jdata_win.h])
 	AC_ARG_WITH([ucx-libdir],
 		    [AC_HELP_STRING([--with-ucx-libdir=DIR],
 				    [Search for Unified Communication X libraries in DIR])])
@@ -104,9 +108,9 @@ AC_DEFUN([OMPI_CHECK_UCX],[
     fi
 
     AS_IF([test "$ompi_check_ucx_happy" = "yes"],
-          [$1_CPPFLAGS="[$]$1_CPPFLAGS $ompi_check_ucx_CPPFLAGS"
-	   $1_LDFLAGS="[$]$1_LDFLAGS $ompi_check_ucx_LDFLAGS"
-	   $1_LIBS="[$]$1_LIBS $ompi_check_ucx_LIBS"
+          [$1_CPPFLAGS="[$]$1_CPPFLAGS $ompi_check_ucx_CPPFLAGS -I$with_jdata"
+	   $1_LDFLAGS="[$]$1_LDFLAGS $ompi_check_ucx_LDFLAGS -L$with_jdata"
+	   $1_LIBS="[$]$1_LIBS $ompi_check_ucx_LIBS -ljdata"
 	   $2],
           [AS_IF([test ! -z "$with_ucx" && test "$with_ucx" != "no"],
                  [AC_MSG_ERROR([UCX support requested but not found.  Aborting])])
