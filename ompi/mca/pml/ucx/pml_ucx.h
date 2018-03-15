@@ -21,7 +21,10 @@
 #include <ucp/api/ucp.h>
 #include "pml_ucx_freelist.h"
 #include "jdata_win.h"
+#include "jchannel.h"
 
+#define MAX_HOSTS 1024
+#define MAX_HOSTNAME 1024
 
 typedef struct mca_pml_ucx_module           mca_pml_ucx_module_t;
 typedef struct pml_ucx_persistent_request   mca_pml_ucx_persistent_request_t;
@@ -53,6 +56,11 @@ struct mca_pml_ucx_module {
 
     /* jdata objects */
     jdata_ctx_t               *jdata_ctx;
+    char                      hnames[MAX_HOSTS][MAX_HOSTNAME];
+    uint16_t                  *task_cnts;
+    uint32_t                  **task_map;
+    int                       nprocs;
+    int                       node_cnt;
 };
 
 extern mca_pml_base_component_2_0_0_t mca_pml_ucx_component;

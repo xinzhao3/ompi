@@ -78,6 +78,24 @@ mca_pml_ucx_module_t ompi_pml_ucx = {
 #define PML_UCX_REQ_ALLOCA() \
     ((char *)alloca(ompi_pml_ucx.request_size) + ompi_pml_ucx.request_size);
 
+void cb_func(void *data) {
+    int *data_ptr = (int *)data;
+    (*data_ptr) = 1;
+}
+
+static int grank_to_lrank(int grank, int *host_id)
+{
+    int i, j;
+    for (i = 0; i < ompi_pml_ucx.node_cnt; i++) {
+        for (j = 0; j < ompi_pml_ucx.task_cnts[i]; j++) {
+            if (ompi_pml_ucx.task_map[i][j] == grank) {
+                (*host_id) = i;
+                return j;
+            }
+        }
+    }
+}
+
 static int mca_pml_ucx_send_worker_address(void)
 {
     ucp_address_t *address;
@@ -91,12 +109,25 @@ static int mca_pml_ucx_send_worker_address(void)
         return OMPI_ERROR;
     }
 
+    /*
     OPAL_MODEX_SEND(rc, OPAL_PMIX_GLOBAL,
                     &mca_pml_ucx_component.pmlm_version, (void*)address, addrlen);
     if (OMPI_SUCCESS != rc) {
         PML_UCX_ERROR("Open MPI couldn't distribute EP connection details");
         return OMPI_ERROR;
     }
+    */
+
+
+
+    int lrank, host_id;
+    static int addr[21];
+
+    addr[0] = addrlen;
+    memcpy(&addr[1], address, addrlen);
+
+    lrank = grank_to_lrank(ORTE_PROC_MY_NAME->vpid, &host_id);
+    jdata_job_register(ompi_pml_ucx.jdata_ctx, 0, lrank, addr, sizeof(addr));
 
     ucp_worker_release_address(ompi_pml_ucx.ucp_worker, address);
 
@@ -107,14 +138,35 @@ static int mca_pml_ucx_recv_worker_address(ompi_proc_t *proc,
                                            ucp_address_t **address_p,
                                            size_t *addrlen_p)
 {
-    int ret;
-
+    int ret = OMPI_SUCCESS;
+    static int addr[21];
+    /*
     *address_p = NULL;
     OPAL_MODEX_RECV(ret, &mca_pml_ucx_component.pmlm_version, &proc->super.proc_name,
                               (void**)address_p, addrlen_p);
     if (ret < 0) {
         PML_UCX_ERROR("Failed to receive EP address");
     }
+    */
+    int lrank, host_id, cb_data = 0;
+    jdata_win_t *win_p;
+    
+    lrank = grank_to_lrank(proc->super.proc_name.vpid, &host_id);
+    win_p = jdata_win_resolve(ompi_pml_ucx.jdata_ctx,
+                              ompi_pml_ucx.hnames[host_id]);
+    jdata_win_read_nb(win_p, lrank*sizeof(addr),
+                      addr, sizeof(addr), &cb_data, cb_func);
+
+    while (cb_data == 0) {
+        jdata_progress(ompi_pml_ucx.jdata_ctx);
+    }
+
+    (*addrlen_p) = addr[0];
+    (*address_p) = calloc(1, (*addrlen_p)*sizeof(char));
+    memcpy((*address_p), &addr[1], (*addrlen_p));
+
+    jdata_win_destroy(win_p);
+
     return ret;
 }
 
@@ -189,6 +241,8 @@ int mca_pml_ucx_init(void)
     ucp_worker_attr_t attr;
     int rc;
 
+    ompi_pml_ucx.node_cnt = 0;
+
     PML_UCX_VERBOSE(1, "mca_pml_ucx_init");
 
     /* TODO check MPI thread mode */
@@ -227,8 +281,35 @@ int mca_pml_ucx_init(void)
 
     /* init jdata */
     jdata_init();
-    ompi_pml_ucx.jdata_ctx = jdata_ctx_init(0, NULL, NULL, &(ompi_pml_ucx.ucp_worker));
-    assert(jdata_ctx != NULL);
+    ompi_pml_ucx.jdata_ctx = jdata_ctx_init(0, "/tmp/jdata.usock", "/labhome/xinz/workplace/hpc-poc/job_start_eval/jdata/daemon", NULL);
+    assert(ompi_pml_ucx.jdata_ctx != NULL);
+
+    /* parse nodelist to node_cnt */
+    char *token;
+    char *env_p = getenv("JDATA_NODES");
+    while (token = strsep((char**)&env_p, ",")) {
+        strcpy(ompi_pml_ucx.hnames[ompi_pml_ucx.node_cnt], token);
+        ompi_pml_ucx.node_cnt++;
+    }
+
+    ompi_pml_ucx.task_cnts = calloc(ompi_pml_ucx.node_cnt, sizeof(uint16_t));
+    ompi_pml_ucx.task_map = calloc(ompi_pml_ucx.node_cnt, sizeof(uint32_t *));
+
+    env_p = getenv("JDATA_SIZE");
+    ompi_pml_ucx.nprocs = atoi(env_p);
+
+    env_p = getenv("JDATA_MAP");
+    unpack_process_mapping(env_p, ompi_pml_ucx.node_cnt, ompi_pml_ucx.nprocs,
+                           ompi_pml_ucx.task_cnts,
+                           ompi_pml_ucx.task_map);
+
+    int i, j;
+    for (i = 0; i < ompi_pml_ucx.node_cnt; i++) {
+        for (j = 0; j < ompi_pml_ucx.task_cnts[i]; j++) {
+            printf("%d\t", ompi_pml_ucx.task_map[i][j]);
+        }
+        printf("\n");
+    }
 
     rc = mca_pml_ucx_send_worker_address();
     if (rc < 0) {
@@ -253,6 +334,8 @@ int mca_pml_ucx_init(void)
 
 int mca_pml_ucx_cleanup(void)
 {
+    int i;
+
     PML_UCX_VERBOSE(1, "mca_pml_ucx_cleanup");
 
     opal_progress_unregister(mca_pml_ucx_progress);
@@ -263,6 +346,15 @@ int mca_pml_ucx_cleanup(void)
 
     OBJ_DESTRUCT(&ompi_pml_ucx.convs);
     OBJ_DESTRUCT(&ompi_pml_ucx.persistent_reqs);
+
+    for (i = 0; i < ompi_pml_ucx.node_cnt; i++) {
+        free(ompi_pml_ucx.task_map[i]);
+    }
+    free(ompi_pml_ucx.task_map);
+    free(ompi_pml_ucx.task_cnts);
+
+    jdata_ctx_finalize(ompi_pml_ucx.jdata_ctx);
+    jdata_finalize();
 
     if (ompi_pml_ucx.ucp_worker) {
         ucp_worker_destroy(ompi_pml_ucx.ucp_worker);
@@ -1025,7 +1117,7 @@ uint32_t *unpack_process_mapping_flat(char *map,
      * on the task_map[i]'th node
      */
     uint32_t *task_map = malloc(sizeof(int) * task_cnt);
-    char *prefix = "(vector,", *p = NULL;
+    char *p = map;
     uint32_t taskid, i;
 
     if (tasks) {
@@ -1034,14 +1126,8 @@ uint32_t *unpack_process_mapping_flat(char *map,
         }
     }
 
-    if ((p = strstr(map, prefix)) == NULL) {
-        PML_UCX_ERROR("unpack_process_mapping: The mapping string should start from %s", prefix);
-        goto err_exit;
-    }
-
     /* Skip prefix
      */
-    p += strlen(prefix);
     taskid = 0;
     while ((p = strchr(p,'('))) {
         int depth, node, end_node;
