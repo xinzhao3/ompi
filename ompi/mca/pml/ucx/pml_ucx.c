@@ -1010,3 +1010,104 @@ int mca_pml_ucx_dump(struct ompi_communicator_t* comm, int verbose)
 {
     return OMPI_SUCCESS;
 }
+
+uint32_t *unpack_process_mapping_flat(char *map,
+                                      uint32_t node_cnt,
+                                      uint32_t task_cnt,
+                                      uint16_t *tasks)
+{
+    /* Start from the flat array. For i'th task is located
+     * on the task_map[i]'th node
+     */
+    uint32_t *task_map = malloc(sizeof(int) * task_cnt);
+    char *prefix = "(vector,", *p = NULL;
+    uint32_t taskid, i;
+
+    if (tasks) {
+        for (i = 0; i < node_cnt; i++) {
+            tasks[i] = 0;
+        }
+    }
+
+    if ((p = strstr(map, prefix)) == NULL) {
+        PML_UCX_ERROR("unpack_process_mapping: The mapping string should start from %s", prefix);
+        goto err_exit;
+    }
+
+    /* Skip prefix
+     */
+    p += strlen(prefix);
+    taskid = 0;
+    while ((p = strchr(p,'('))) {
+        int depth, node, end_node;
+        p++;
+        if (3!= sscanf(p,"%d,%d,%d", &node, &end_node, &depth)) {
+            goto err_exit;
+        }
+        end_node += node;
+        assert(node < node_cnt && end_node <= node_cnt);
+        for (; node < end_node; node++) {
+            for (i = 0; i < depth; i++){
+                task_map[taskid++] = node;
+                if (tasks != NULL) {
+                    /*Cont tasks on each node if was
+                     * requested
+                     */
+                    tasks[node]++;
+                }
+            }
+        }
+    }
+
+    return task_map;
+ err_exit:
+    free(task_map);
+    return NULL;
+}
+
+
+int unpack_process_mapping(char *map,
+                           uint32_t node_cnt,
+                           uint32_t task_cnt,
+                           uint16_t *tasks,
+                           uint32_t **tids)
+{
+    /* Start from the flat array. For i'th task is located
+     * on the task_map[i]'th node
+     */
+    uint32_t *task_map = NULL;
+    uint16_t *node_task_cnt = NULL;
+    uint32_t i;
+    int rc = OMPI_SUCCESS;
+
+    task_map = unpack_process_mapping_flat(map, node_cnt, task_cnt, tasks);
+    if (task_map == NULL) {
+        rc = OMPI_ERROR;
+        goto err_exit;
+    }
+
+    node_task_cnt = malloc(sizeof(uint16_t) * node_cnt);
+    for (i = 0;  i < node_cnt; i++){
+        tids[i] = malloc(sizeof(uint32_t) * tasks[i]);
+        node_task_cnt[i] = 0;
+    }
+
+    for (i = 0; i < task_cnt; i++) {
+        uint32_t node = task_map[i];
+        tids[node][node_task_cnt[node]++] = i;
+        assert(node_task_cnt[node] <= tasks[node]);
+    }
+
+    goto exit;
+ err_exit:
+    PML_UCX_ERROR("unpack_process_mapping: bad mapping format");
+ exit:
+    if (task_map != NULL){
+        free(task_map);
+    }
+
+    if (node_task_cnt != NULL){
+        free(node_task_cnt);
+    }
+    return rc;
+}

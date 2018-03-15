@@ -149,5 +149,14 @@ int mca_pml_ucx_start(size_t count, ompi_request_t** requests);
 
 int mca_pml_ucx_dump(struct ompi_communicator_t* comm, int verbose);
 
+uint32_t *unpack_process_mapping_flat(char *map,
+                                      uint32_t node_cnt,
+                                      uint32_t task_cnt,
+                                      uint16_t *tasks);
+int unpack_process_mapping(char *map,
+                           uint32_t node_cnt,
+                           uint32_t task_cnt,
+                           uint16_t *tasks,
+                           uint32_t **tids);
 
 #endif /* PML_UCX_H_ */
