@@ -281,7 +281,7 @@ int mca_pml_ucx_init(void)
 
     /* init jdata */
     jdata_init();
-    ompi_pml_ucx.jdata_ctx = jdata_ctx_init(0, "/tmp/jdata.usock", "/labhome/xinz/workplace/hpc-poc/job_start_eval/jdata/daemon", NULL);
+    ompi_pml_ucx.jdata_ctx = jdata_ctx_init(0, "/tmp/jdata.usock", "/tmp/eps", NULL);
     assert(ompi_pml_ucx.jdata_ctx != NULL);
 
     /* parse nodelist to node_cnt */
@@ -303,6 +303,7 @@ int mca_pml_ucx_init(void)
                            ompi_pml_ucx.task_cnts,
                            ompi_pml_ucx.task_map);
 
+#if 0
     int i, j;
     for (i = 0; i < ompi_pml_ucx.node_cnt; i++) {
         for (j = 0; j < ompi_pml_ucx.task_cnts[i]; j++) {
@@ -310,6 +311,7 @@ int mca_pml_ucx_init(void)
         }
         printf("\n");
     }
+#endif
 
     rc = mca_pml_ucx_send_worker_address();
     if (rc < 0) {
