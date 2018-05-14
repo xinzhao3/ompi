@@ -19,7 +19,8 @@
 #include "oshmem/mca/atomic/base/base.h"
 #include "atomic_basic.h"
 
-int mca_atomic_basic_fadd(void *target,
+int mca_atomic_basic_fadd(shmem_ctx_t ctx,
+                          void *target,
                           void *prev,
                           const void *value,
                           size_t nlong,
@@ -29,9 +30,9 @@ int mca_atomic_basic_fadd(void *target,
     int rc = OSHMEM_SUCCESS;
     long long temp_value = 0;
 
-    atomic_basic_lock(pe);
+    atomic_basic_lock(ctx, pe);
 
-    rc = MCA_SPML_CALL(get(target, nlong, (void*)&temp_value, pe));
+    rc = MCA_SPML_CALL(get(ctx, target, nlong, (void*)&temp_value, pe));
 
     if (prev)
         memcpy(prev, (void*) &temp_value, nlong);
@@ -41,11 +42,11 @@ int mca_atomic_basic_fadd(void *target,
             nlong / op->dt_size);
 
     if (rc == OSHMEM_SUCCESS) {
-        rc = MCA_SPML_CALL(put(target, nlong, (void*)&temp_value, pe));
+        rc = MCA_SPML_CALL(put(ctx, target, nlong, (void*)&temp_value, pe));
         shmem_quiet();
     }
 
-    atomic_basic_unlock(pe);
+    atomic_basic_unlock(ctx, pe);
 
     return rc;
 }

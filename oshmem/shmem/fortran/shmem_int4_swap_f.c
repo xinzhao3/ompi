@@ -36,7 +36,7 @@ ompi_fortran_integer4_t shmem_int4_swap_f(FORTRAN_POINTER_T target, FORTRAN_POIN
 {
     ompi_fortran_integer4_t out_value = 0;
 
-    MCA_ATOMIC_CALL(cswap(FPTR_2_VOID_PTR(target),
+    MCA_ATOMIC_CALL(cswap(SHMEM_CTX_DEFAULT, FPTR_2_VOID_PTR(target),
         (void *)&out_value,
         NULL,
         FPTR_2_VOID_PTR(value),

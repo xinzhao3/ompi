@@ -35,7 +35,7 @@ void shmem_real8_set_f(FORTRAN_POINTER_T target, FORTRAN_POINTER_T value, MPI_Fi
 {
     ompi_fortran_real8_t out_value = 0;
 
-    MCA_ATOMIC_CALL(cswap(FPTR_2_VOID_PTR(target),
+    MCA_ATOMIC_CALL(cswap(SHMEM_CTX_DEFAULT, FPTR_2_VOID_PTR(target),
         (void *)&out_value,
         NULL,
         FPTR_2_VOID_PTR(value),

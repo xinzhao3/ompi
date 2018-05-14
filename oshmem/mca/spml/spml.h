@@ -184,16 +184,36 @@ typedef int (*mca_spml_base_module_add_procs_fn_t)(ompi_proc_t** procs,
 typedef int (*mca_spml_base_module_del_procs_fn_t)(ompi_proc_t** procs,
                                                    size_t nprocs);
 
+
+/**
+ * Create a communication context.
+ *
+ * @param options  The set of options requested for the given context.
+ * @param ctx      A handle to the newly created context.
+ * @return         OSHMEM_SUCCESS or failure status.
+ */
+typedef int (*mca_spml_base_module_ctx_create_fn_t)(long options, shmem_ctx_t *ctx);
+
+
+/**
+ * Destroy a communication context.
+ *
+ * @param ctx      Handle to the context that will be destroyed.
+ */
+typedef void (*mca_spml_base_module_ctx_destroy_fn_t)(shmem_ctx_t ctx);
+
 /**
  * Transfer data to a remote pe.
  *
+ * @param ctx      The context object this routine is working on.
  * @param dst_addr The address in the remote PE of the object being written.
  * @param size     The number of bytes to be written.
  * @param src_addr An address on the local PE holdng the value to be written.
  * @param dst      The remote PE to be written to.
  * @return         OSHMEM_SUCCESS or failure status.
  */
-typedef int (*mca_spml_base_module_put_fn_t)(void *dst_addr,
+typedef int (*mca_spml_base_module_put_fn_t)(shmem_ctx_t ctx,
+                                             void *dst_addr,
                                              size_t size,
                                              void *src_addr,
                                              int dst);
@@ -203,6 +223,7 @@ typedef int (*mca_spml_base_module_put_fn_t)(void *dst_addr,
  * blocking the caller. These routines return before the data has been delivered to the
  * remote PE.
  *
+ * @param ctx      The context object this routine is working on.
  * @param dst_addr The address in the remote PE of the object being written.
  * @param size     The number of bytes to be written.
  * @param src_addr An address on the local PE holdng the value to be written.
@@ -211,7 +232,8 @@ typedef int (*mca_spml_base_module_put_fn_t)(void *dst_addr,
  *                 shmem_test_nb() to wait or poll for the completion of the transfer.
  * @return         OSHMEM_SUCCESS or failure status.
  */
-typedef int (*mca_spml_base_module_put_nb_fn_t)(void *dst_addr,
+typedef int (*mca_spml_base_module_put_nb_fn_t)(shmem_ctx_t ctx,
+                                                void *dst_addr,
                                                 size_t size,
                                                 void *src_addr,
                                                 int dst,
@@ -221,13 +243,15 @@ typedef int (*mca_spml_base_module_put_nb_fn_t)(void *dst_addr,
  * Blocking data transfer from remote PE.
  * Read data from remote PE.
  *
+ * @param ctx      The context object this routine is working on.
  * @param dst_addr The address on the local PE, to write the result of the get operation to.
  * @param size     The number of bytes to be read.
  * @param src_addr The address on the remote PE, to read from.
  * @param src      The ID of the remote PE.
  * @return         OSHMEM_SUCCESS or failure status.
  */
-typedef int (*mca_spml_base_module_get_fn_t)(void *dst_addr,
+typedef int (*mca_spml_base_module_get_fn_t)(shmem_ctx_t ctx,
+                                             void *dst_addr,
                                              size_t size,
                                              void *src_addr,
                                              int src);
@@ -236,6 +260,7 @@ typedef int (*mca_spml_base_module_get_fn_t)(void *dst_addr,
  * Non-blocking data transfer from remote PE.
  * Read data from remote PE.
  *
+ * @param ctx      The context object this routine is working on.
  * @param dst_addr The address on the local PE, to write the result of the get operation to.
  * @param size     The number of bytes to be read.
  * @param src_addr The address on the remote PE, to read from.
@@ -244,7 +269,8 @@ typedef int (*mca_spml_base_module_get_fn_t)(void *dst_addr,
  *                 shmem_test_nb() to wait or poll for the completion of the transfer.
  * @return         - OSHMEM_SUCCESS or failure status.
  */
-typedef int (*mca_spml_base_module_get_nb_fn_t)(void *dst_addr,
+typedef int (*mca_spml_base_module_get_nb_fn_t)(shmem_ctx_t ctx,
+                                               void *dst_addr,
                                                size_t size,
                                                void *src_addr,
                                                int src,
@@ -277,16 +303,18 @@ typedef int (*mca_spml_base_module_send_fn_t)(void *buf,
 /**
  * Assures ordering of delivery of put() requests
  *
+ * @param ctx      - The context object this routine is working on.
  * @return         - OSHMEM_SUCCESS or failure status.
  */
-typedef int (*mca_spml_base_module_fence_fn_t)(void);
+typedef int (*mca_spml_base_module_fence_fn_t)(shmem_ctx_t ctx);
 
 /**
  * Wait for completion of all outstanding put() requests
  *
+ * @param ctx      - The context object this routine is working on.
  * @return         - OSHMEM_SUCCESS or failure status.
  */
-typedef int (*mca_spml_base_module_quiet_fn_t)(void);
+typedef int (*mca_spml_base_module_quiet_fn_t)(shmem_ctx_t ctx);
 
 /**
  * Waits for completion of a non-blocking put or get issued by the calling PE.
@@ -316,6 +344,9 @@ struct mca_spml_base_module_1_0_0_t {
     mca_spml_base_module_register_fn_t spml_register;
     mca_spml_base_module_deregister_fn_t spml_deregister;
     mca_spml_base_module_oob_get_mkeys_fn_t spml_oob_get_mkeys;
+
+    mca_spml_base_module_ctx_create_fn_t spml_ctx_create;
+    mca_spml_base_module_ctx_destroy_fn_t spml_ctx_destroy;
 
     mca_spml_base_module_put_fn_t spml_put;
     mca_spml_base_module_put_nb_fn_t spml_put_nb;

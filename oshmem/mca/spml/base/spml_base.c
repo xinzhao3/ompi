@@ -153,7 +153,7 @@ int mca_spml_base_wait(void* addr, int cmp, void* value, int datatype)
  */
 int mca_spml_base_wait_nb(void* handle)
 {
-    MCA_SPML_CALL(quiet());
+    MCA_SPML_CALL(quiet(SHMEM_CTX_DEFAULT));
 
     return OSHMEM_SUCCESS;
 }

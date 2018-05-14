@@ -41,13 +41,15 @@ int mca_atomic_ucx_finalize(void);
 mca_atomic_base_module_t*
 mca_atomic_ucx_query(int *priority);
 
-int mca_atomic_ucx_fadd(void *target,
+int mca_atomic_ucx_fadd(shmem_ctx_t ctx,
+                        void *target,
                         void *prev,
                         const void *value,
                         size_t nlong,
                         int pe,
                         struct oshmem_op_t *op);
-int mca_atomic_ucx_cswap(void *target,
+int mca_atomic_ucx_cswap(shmem_ctx_t ctx,
+                         void *target,
                          void *prev,
                          const void *cond,
                          const void *value,
@@ -64,7 +66,7 @@ OBJ_CLASS_DECLARATION(mca_atomic_ucx_module_t);
 void mca_atomic_ucx_complete_cb(void *request, ucs_status_t status);
 
 static inline
-ucs_status_t mca_atomic_ucx_wait_request(ucs_status_ptr_t request)
+ucs_status_t mca_atomic_ucx_wait_request(mca_spml_ucx_ctx_t *ucx_ctx, ucs_status_ptr_t request)
 {
     ucs_status_t status;
     int i;
@@ -83,7 +85,7 @@ ucs_status_t mca_atomic_ucx_wait_request(ucs_status_ptr_t request)
                 ucp_request_free(request);
                 return status;
             }
-            ucp_worker_progress(mca_spml_self->ucp_worker);
+            ucp_worker_progress(ucx_ctx->ucp_worker);
         }
         /* call OPAL progress on every 100 call to UCX progress */
         opal_progress();

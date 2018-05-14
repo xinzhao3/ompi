@@ -55,6 +55,7 @@
  * Public variables
  */
 
+shmem_ctx_t SHMEM_CTX_DEFAULT = NULL;
 
 int main(int argc, char *argv[])
 {

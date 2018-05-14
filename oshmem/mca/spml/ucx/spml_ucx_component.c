@@ -110,7 +110,7 @@ static int mca_spml_ucx_component_register(void)
 
 int spml_ucx_progress(void)
 {
-    ucp_worker_progress(mca_spml_ucx.ucp_worker);
+    ucp_worker_progress(mca_spml_ucx_ctx_default.ucp_worker);
     return 1;
 }
 
@@ -126,9 +126,10 @@ static int mca_spml_ucx_component_open(void)
     }
 
     memset(&params, 0, sizeof(params));
-    params.field_mask = UCP_PARAM_FIELD_FEATURES|UCP_PARAM_FIELD_ESTIMATED_NUM_EPS;
+    params.field_mask = UCP_PARAM_FIELD_FEATURES|UCP_PARAM_FIELD_ESTIMATED_NUM_EPS|UCP_PARAM_FIELD_MT_WORKERS_SHARED;
     params.features   = UCP_FEATURE_RMA|UCP_FEATURE_AMO32|UCP_FEATURE_AMO64;
     params.estimated_num_eps = ompi_proc_world_size();
+    params.mt_workers_shared = 1;
 
     err = ucp_init(&params, ucp_config, &mca_spml_ucx.ucp_context);
     ucp_config_release(ucp_config);
@@ -136,11 +137,15 @@ static int mca_spml_ucx_component_open(void)
         return OSHMEM_ERROR;
     }
 
+    OBJ_CONSTRUCT(&(mca_spml_ucx.ctx_list), opal_list_t);
+
     return OSHMEM_SUCCESS;
 }
 
 static int mca_spml_ucx_component_close(void)
 {
+    OBJ_DESTRUCT(&(mca_spml_ucx.ctx_list));
+
     if (mca_spml_ucx.ucp_context) {
         ucp_cleanup(mca_spml_ucx.ucp_context);
         mca_spml_ucx.ucp_context = NULL;
@@ -154,13 +159,15 @@ static int spml_ucx_init(void)
     ucs_status_t err;
 
     params.field_mask  = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
-    params.thread_mode = UCS_THREAD_MODE_SINGLE;
+    params.thread_mode = UCS_THREAD_MODE_MULTI;
 
     err = ucp_worker_create(mca_spml_ucx.ucp_context, &params,
-                            &mca_spml_ucx.ucp_worker);
+                            &mca_spml_ucx_ctx_default.ucp_worker);
     if (UCS_OK != err) {
         return OSHMEM_ERROR;
     }
+
+    SHMEM_CTX_DEFAULT = (shmem_ctx_t) &mca_spml_ucx_ctx_default;
 
     return OSHMEM_SUCCESS;
 }
@@ -189,8 +196,8 @@ static int mca_spml_ucx_component_fini(void)
 {
     opal_progress_unregister(spml_ucx_progress);
         
-    if (mca_spml_ucx.ucp_worker) {
-        ucp_worker_destroy(mca_spml_ucx.ucp_worker);
+    if (mca_spml_ucx_ctx_default.ucp_worker) {
+        ucp_worker_destroy(mca_spml_ucx_ctx_default.ucp_worker);
     }
     if(!mca_spml_ucx.enabled)
         return OSHMEM_SUCCESS; /* never selected.. return success.. */

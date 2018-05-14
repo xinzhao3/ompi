@@ -108,7 +108,7 @@ mca_atomic_basic_query(int *priority)
     return NULL ;
 }
 
-void atomic_basic_lock(int pe)
+void atomic_basic_lock(shmem_ctx_t ctx, int pe)
 {
     int index = -1;
     int me = oshmem_my_proc_id();
@@ -120,15 +120,15 @@ void atomic_basic_lock(int pe)
     do {
         /* announce that we need the resource */
         do {
-            MCA_SPML_CALL(put((void*)(atomic_lock_sync + me), sizeof(lock_required), (void*)&lock_required, root_pe));
-            MCA_SPML_CALL(get((void*)atomic_lock_sync, num_pe * sizeof(*atomic_lock_sync), (void*)local_lock_sync, root_pe));
+            MCA_SPML_CALL(put(ctx, (void*)(atomic_lock_sync + me), sizeof(lock_required), (void*)&lock_required, root_pe));
+            MCA_SPML_CALL(get(ctx, (void*)atomic_lock_sync, num_pe * sizeof(*atomic_lock_sync), (void*)local_lock_sync, root_pe));
         } while (local_lock_sync[me] != lock_required);
 
-        MCA_SPML_CALL(get((void*)atomic_lock_turn, sizeof(index), (void*)&index, root_pe));
+        MCA_SPML_CALL(get(ctx, (void*)atomic_lock_turn, sizeof(index), (void*)&index, root_pe));
         while (index != me) {
             if (local_lock_sync[index] != ATOMIC_LOCK_IDLE) {
-                MCA_SPML_CALL(get((void*)atomic_lock_turn, sizeof(index), (void*)&index, root_pe));
-                MCA_SPML_CALL(get((void*)atomic_lock_sync, num_pe * sizeof(*atomic_lock_sync), (void*)local_lock_sync, root_pe));
+                MCA_SPML_CALL(get(ctx, (void*)atomic_lock_turn, sizeof(index), (void*)&index, root_pe));
+                MCA_SPML_CALL(get(ctx, (void*)atomic_lock_sync, num_pe * sizeof(*atomic_lock_sync), (void*)local_lock_sync, root_pe));
             } else {
                 index = (index + 1) % num_pe;
             }
@@ -136,8 +136,8 @@ void atomic_basic_lock(int pe)
 
         /* now tentatively claim the resource */
         do {
-            MCA_SPML_CALL(put((void*)(atomic_lock_sync + me), sizeof(lock_active), (void*)&lock_active, root_pe));
-            MCA_SPML_CALL(get((void*)atomic_lock_sync, num_pe * sizeof(*atomic_lock_sync), (void*)local_lock_sync, root_pe));
+            MCA_SPML_CALL(put(ctx, (void*)(atomic_lock_sync + me), sizeof(lock_active), (void*)&lock_active, root_pe));
+            MCA_SPML_CALL(get(ctx, (void*)atomic_lock_sync, num_pe * sizeof(*atomic_lock_sync), (void*)local_lock_sync, root_pe));
         } while (local_lock_sync[me] != lock_active);
 
         index = 0;
@@ -147,15 +147,15 @@ void atomic_basic_lock(int pe)
             index = index + 1;
         }
 
-        MCA_SPML_CALL(get((void*)atomic_lock_turn, sizeof(*atomic_lock_turn), (void*)local_lock_turn, root_pe));
+        MCA_SPML_CALL(get(ctx, (void*)atomic_lock_turn, sizeof(*atomic_lock_turn), (void*)local_lock_turn, root_pe));
     } while (!((index >= num_pe)
             && ((*local_lock_turn == me)
                     || (local_lock_sync[*local_lock_turn] == ATOMIC_LOCK_IDLE))));
 
-    MCA_SPML_CALL(put((void*)atomic_lock_turn, sizeof(me), (void*)&me, root_pe));
+    MCA_SPML_CALL(put(ctx, (void*)atomic_lock_turn, sizeof(me), (void*)&me, root_pe));
 }
 
-void atomic_basic_unlock(int pe)
+void atomic_basic_unlock(shmem_ctx_t ctx, int pe)
 {
     int index = -1;
     int me = oshmem_my_proc_id();
@@ -163,17 +163,17 @@ void atomic_basic_unlock(int pe)
     char lock_idle = ATOMIC_LOCK_IDLE;
     int root_pe = pe;
 
-    MCA_SPML_CALL(get((void*)atomic_lock_sync, num_pe * sizeof(*atomic_lock_sync), (void*)local_lock_sync, root_pe));
-    MCA_SPML_CALL(get((void*)atomic_lock_turn, sizeof(index), (void*)&index, root_pe));
+    MCA_SPML_CALL(get(ctx, (void*)atomic_lock_sync, num_pe * sizeof(*atomic_lock_sync), (void*)local_lock_sync, root_pe));
+    MCA_SPML_CALL(get(ctx, (void*)atomic_lock_turn, sizeof(index), (void*)&index, root_pe));
 
     do {
         index = (index + 1) % num_pe;
     } while (local_lock_sync[index] == ATOMIC_LOCK_IDLE);
 
-    MCA_SPML_CALL(put((void*)atomic_lock_turn, sizeof(index), (void*)&index, root_pe));
+    MCA_SPML_CALL(put(ctx, (void*)atomic_lock_turn, sizeof(index), (void*)&index, root_pe));
 
     do {
-        MCA_SPML_CALL(put((void*)(atomic_lock_sync + me), sizeof(lock_idle), (void*)&lock_idle, root_pe));
-        MCA_SPML_CALL(get((void*)atomic_lock_sync, num_pe * sizeof(*atomic_lock_sync), (void*)local_lock_sync, root_pe));
+        MCA_SPML_CALL(put(ctx, (void*)(atomic_lock_sync + me), sizeof(lock_idle), (void*)&lock_idle, root_pe));
+        MCA_SPML_CALL(get(ctx, (void*)atomic_lock_sync, num_pe * sizeof(*atomic_lock_sync), (void*)local_lock_sync, root_pe));
     } while (local_lock_sync[me] != lock_idle);
 }

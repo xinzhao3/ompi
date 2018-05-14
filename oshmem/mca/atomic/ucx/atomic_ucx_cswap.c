@@ -22,7 +22,8 @@
 /* nlong argument should be constant to hint compiler
  * to calculate nlong relative branches in compile time */
 static inline
-int mca_atomic_ucx_cswap_inner(void *target,
+int mca_atomic_ucx_cswap_inner(shmem_ctx_t ctx,
+                               void *target,
                                void *prev,
                                const void *cond,
                                const void *value,
@@ -35,21 +36,22 @@ int mca_atomic_ucx_cswap_inner(void *target,
     uint64_t rva;
     uint64_t val;
     uint64_t cmp;
+    mca_spml_ucx_ctx_t *ucx_ctx = (mca_spml_ucx_ctx_t *)ctx;
 
     val = (4 == nlong) ? *(uint32_t*)value : *(uint64_t*)value;
-    ucx_mkey = mca_spml_ucx_get_mkey(pe, target, (void *)&rva); 
+    ucx_mkey = mca_spml_ucx_get_mkey(ucx_ctx, pe, target, (void *)&rva); 
     if (NULL == cond) {
-        status_ptr = ucp_atomic_fetch_nb(mca_spml_self->ucp_peers[pe].ucp_conn,
+        status_ptr = ucp_atomic_fetch_nb(ucx_ctx->ucp_peers[pe].ucp_conn,
                                          UCP_ATOMIC_FETCH_OP_SWAP, val, prev, nlong,
                                          rva, ucx_mkey->rkey, mca_atomic_ucx_complete_cb);
-        status = mca_atomic_ucx_wait_request(status_ptr);
+        status = mca_atomic_ucx_wait_request(ucx_ctx, status_ptr);
     }
     else {
         cmp = (4 == nlong) ? *(uint32_t*)cond : *(uint64_t*)cond;
-        status_ptr = ucp_atomic_fetch_nb(mca_spml_self->ucp_peers[pe].ucp_conn,
+        status_ptr = ucp_atomic_fetch_nb(ucx_ctx->ucp_peers[pe].ucp_conn,
                                          UCP_ATOMIC_FETCH_OP_CSWAP, cmp, &val, nlong,
                                          rva, ucx_mkey->rkey, mca_atomic_ucx_complete_cb);
-        status = mca_atomic_ucx_wait_request(status_ptr);
+        status = mca_atomic_ucx_wait_request(ucx_ctx, status_ptr);
         if (UCS_OK == status) {
             assert(NULL != prev);
             memcpy(prev, &val, nlong);
@@ -63,7 +65,8 @@ int mca_atomic_ucx_cswap_inner(void *target,
     return ucx_status_to_oshmem(status);
 }
 
-int mca_atomic_ucx_cswap(void *target,
+int mca_atomic_ucx_cswap(shmem_ctx_t ctx,
+                         void *target,
                          void *prev,
                          const void *cond,
                          const void *value,
@@ -71,9 +74,9 @@ int mca_atomic_ucx_cswap(void *target,
                          int pe)
 {
     if (8 == nlong) {
-        return mca_atomic_ucx_cswap_inner(target, prev, cond, value, 8, pe);
+        return mca_atomic_ucx_cswap_inner(ctx, target, prev, cond, value, 8, pe);
     } else if (4 == nlong) {
-        return mca_atomic_ucx_cswap_inner(target, prev, cond, value, 4, pe);
+        return mca_atomic_ucx_cswap_inner(ctx, target, prev, cond, value, 4, pe);
     } else {
         ATOMIC_ERROR("[#%d] Type size must be 4 or 8 bytes.", my_pe);
         return OSHMEM_ERROR;

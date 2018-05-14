@@ -160,6 +160,8 @@ mca_spml_ikrit_t mca_spml_ikrit = {
         mca_spml_ikrit_register,
         mca_spml_ikrit_deregister,
         mca_spml_ikrit_oob_get_mkeys,
+        NULL,
+        NULL,
         mca_spml_ikrit_put,
         mca_spml_ikrit_put_nb,
         mca_spml_ikrit_get,

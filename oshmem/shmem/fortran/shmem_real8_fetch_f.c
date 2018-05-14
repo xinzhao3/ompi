@@ -38,7 +38,7 @@ ompi_fortran_real8_t shmem_real8_fetch_f(FORTRAN_POINTER_T target, MPI_Fint *pe)
     oshmem_op_t* op = oshmem_op_sum_freal8;
     int value = 0;
 
-    MCA_ATOMIC_CALL(fadd(FPTR_2_VOID_PTR(target),
+    MCA_ATOMIC_CALL(fadd(SHMEM_CTX_DEFAULT, FPTR_2_VOID_PTR(target),
         (void *)&out_value,
         (const void *)&value,
         sizeof(out_value),
