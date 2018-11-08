@@ -16,6 +16,7 @@
 #include "opal_config.h"
 
 #include <stdint.h>
+#include <string.h>
 
 #include <ucp/api/ucp.h>
 
@@ -95,6 +96,22 @@ typedef struct opal_common_ucx_del_proc {
 } opal_common_ucx_del_proc_t;
 
 extern opal_common_ucx_module_t opal_common_ucx;
+
+typedef struct thread_local_info {
+    opal_list_item_t super;
+    ucp_worker_h worker;
+    ucp_ep_h *eps;
+    ucp_rkey_h *rkeys;
+    int comm_size;
+    pthread_mutex_t lock;
+} thread_local_info_t;
+
+OBJ_CLASS_DECLARATION(thread_local_info_t);
+
+extern pthread_key_t my_thread_key;
+
+extern opal_list_t active_workers, idle_workers;
+extern pthread_mutex_t active_workers_mutex, idle_workers_mutex;
 
 OPAL_DECLSPEC void opal_common_ucx_mca_register(void);
 OPAL_DECLSPEC void opal_common_ucx_mca_deregister(void);
@@ -199,6 +216,83 @@ int opal_common_ucx_atomic_cswap(ucp_ep_h ep, uint64_t compare,
             *(uint32_t*)result = tmp;
         }
     }
+    return ret;
+}
+
+static inline void opal_common_ucx_cleanup_local_worker(void *arg) {
+    thread_local_info_t *my_thread_info = (thread_local_info_t *)arg;
+
+    assert(my_thread_info != NULL);
+
+    pthread_mutex_lock(&active_workers_mutex);
+    opal_list_remove_item(&active_workers, &my_thread_info->super);
+    pthread_mutex_unlock(&active_workers_mutex);
+
+    pthread_mutex_lock(&idle_workers_mutex);
+    opal_list_append(&idle_workers, &my_thread_info->super);
+    pthread_mutex_unlock(&idle_workers_mutex);
+}
+
+static inline int opal_common_ucx_create_local_worker(ucp_context_h context, int comm_size,
+                                                      char *worker_buf, int *worker_disps,
+                                                      char *mem_buf, int *mem_disps)
+{
+    ucp_worker_params_t worker_params;
+    ucs_status_t status;
+    thread_local_info_t *my_thread_info;
+    int i, ret = OPAL_SUCCESS;
+
+    if (!opal_list_is_empty(&idle_workers)) {
+        pthread_mutex_lock(&idle_workers_mutex);
+        my_thread_info = (thread_local_info_t *)opal_list_get_first(&idle_workers);
+        opal_list_remove_item(&idle_workers, &my_thread_info->super);
+        pthread_mutex_unlock(&idle_workers_mutex);
+    } else {
+        my_thread_info = OBJ_NEW(thread_local_info_t);
+        memset(my_thread_info, 0, sizeof(thread_local_info_t));
+        pthread_mutex_init(&(my_thread_info->lock), NULL);
+
+        my_thread_info->comm_size = comm_size;
+
+        memset(&worker_params, 0, sizeof(worker_params));
+        worker_params.field_mask = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
+        worker_params.thread_mode = UCS_THREAD_MODE_SINGLE;
+        status = ucp_worker_create(context, &worker_params,
+                                   &(my_thread_info->worker));
+        if (UCS_OK != status) {
+            ret = OPAL_ERROR;
+        }
+
+        my_thread_info->eps = calloc(comm_size, sizeof(ucp_ep_h));
+        my_thread_info->rkeys = calloc(comm_size, sizeof(ucp_rkey_h));
+
+        for (i = 0; i < comm_size; i++) {
+            ucp_ep_params_t ep_params;
+
+            memset(&ep_params, 0, sizeof(ucp_ep_params_t));
+            ep_params.field_mask = UCP_EP_PARAM_FIELD_REMOTE_ADDRESS;
+            ep_params.address = (ucp_address_t *)&(worker_buf[worker_disps[i]]);
+            status = ucp_ep_create(my_thread_info->worker, &ep_params,
+                                   &my_thread_info->eps[i]);
+            if (status != UCS_OK) {
+                ret = OPAL_ERROR;
+            }
+
+            status = ucp_ep_rkey_unpack(my_thread_info->eps[i],
+                                        &(mem_buf[mem_disps[i] + 3 * sizeof(uint64_t)]),
+                                        &(my_thread_info->rkeys[i]));
+            if (status != UCS_OK) {
+                ret = OPAL_ERROR;
+            }
+        }
+    }
+
+    pthread_mutex_lock(&active_workers_mutex);
+    opal_list_append(&active_workers, &my_thread_info->super);
+    pthread_mutex_unlock(&active_workers_mutex);
+
+    pthread_setspecific(my_thread_key, my_thread_info);
+
     return ret;
 }
 

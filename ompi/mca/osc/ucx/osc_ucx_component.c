@@ -35,6 +35,10 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
                             int flavor, int *model);
 static void ompi_osc_ucx_unregister_progress(void);
 
+opal_list_t active_workers = {{0}}, idle_workers = {{0}};
+pthread_mutex_t active_workers_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t idle_workers_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 ompi_osc_ucx_component_t mca_osc_ucx_component = {
     { /* ompi_osc_base_component_t */
         .osc_version = {
@@ -58,7 +62,12 @@ ompi_osc_ucx_component_t mca_osc_ucx_component = {
     .ucp_worker             = NULL,
     .env_initialized        = false,
     .num_incomplete_req_ops = 0,
-    .num_modules            = 0
+    .num_modules            = 0,
+    .worker_mutex           = PTHREAD_MUTEX_INITIALIZER,
+    .worker_addr_buf        = NULL,
+    .worker_addr_disps      = NULL,
+    .mem_addr_buf           = NULL,
+    .mem_addr_disps         = NULL
 };
 
 ompi_osc_ucx_module_t ompi_osc_ucx_module_template = {
@@ -126,13 +135,84 @@ static int progress_callback(void) {
 
 static int component_init(bool enable_progress_threads, bool enable_mpi_threads) {
     mca_osc_ucx_component.enable_mpi_threads = enable_mpi_threads;
+    mca_osc_ucx_component.main_tid = pthread_self();
+
+    OBJ_CONSTRUCT(&active_workers, opal_list_t);
+    OBJ_CONSTRUCT(&idle_workers, opal_list_t);
+
+    pthread_mutex_init(&active_workers_mutex, NULL);
+    pthread_mutex_init(&idle_workers_mutex, NULL);
+    pthread_mutex_init(&mca_osc_ucx_component.worker_mutex, NULL);
+
+    pthread_key_create(&my_thread_key, opal_common_ucx_cleanup_local_worker);
 
     opal_common_ucx_mca_register();
     return OMPI_SUCCESS;
 }
 
+static void cleanup_thread_local_info(thread_local_info_t *curr_worker) {
+    int i;
+
+    if (curr_worker->rkeys != NULL) {
+        for (i = 0; i < curr_worker->comm_size; i++) {
+            if (curr_worker->rkeys[i] != NULL) {
+                ucp_rkey_destroy(curr_worker->rkeys[i]);
+            }
+        }
+        free(curr_worker->rkeys);
+    }
+
+    if (curr_worker->eps != NULL) {
+        for (i = 0; i < curr_worker->comm_size; i++) {
+            if (curr_worker->eps[i] != NULL) {
+                ucp_ep_destroy(curr_worker->eps[i]);
+            }
+        }
+        free(curr_worker->eps);
+    }
+
+    if (curr_worker->worker != NULL) {
+        ucp_worker_destroy(curr_worker->worker);
+    }
+
+    pthread_mutex_destroy(&curr_worker->lock);
+}
+
 static int component_finalize(void) {
     int i;
+
+    if (!opal_list_is_empty(&active_workers)) {
+        thread_local_info_t *curr_worker, *next;
+        OPAL_LIST_FOREACH_SAFE(curr_worker, next, &active_workers, thread_local_info_t) {
+            opal_list_remove_item(&active_workers, &curr_worker->super);
+            cleanup_thread_local_info(curr_worker);
+        }
+    }
+    OBJ_DESTRUCT(&active_workers);
+
+    if (!opal_list_is_empty(&idle_workers)) {
+        thread_local_info_t *curr_worker, *next;
+        OPAL_LIST_FOREACH_SAFE(curr_worker, next, &idle_workers, thread_local_info_t) {
+            opal_list_remove_item(&idle_workers, &curr_worker->super);
+            cleanup_thread_local_info(curr_worker);
+        }
+    }
+    OBJ_DESTRUCT(&idle_workers);
+
+    pthread_mutex_destroy(&active_workers_mutex);
+    pthread_mutex_destroy(&idle_workers_mutex);
+    pthread_mutex_destroy(&mca_osc_ucx_component.worker_mutex);
+    pthread_key_delete(my_thread_key);
+
+    if (mca_osc_ucx_component.worker_addr_buf != NULL)
+        free(mca_osc_ucx_component.worker_addr_buf);
+    if (mca_osc_ucx_component.worker_addr_disps != NULL)
+        free(mca_osc_ucx_component.worker_addr_disps);
+    if (mca_osc_ucx_component.mem_addr_buf != NULL)
+        free(mca_osc_ucx_component.mem_addr_buf);
+    if (mca_osc_ucx_component.mem_addr_disps != NULL)
+        free(mca_osc_ucx_component.mem_addr_disps);
+
     for (i = 0; i < ompi_proc_world_size(); i++) {
         ucp_ep_h ep = OSC_UCX_GET_EP(&(ompi_mpi_comm_world.comm), i);
         if (ep != NULL) {
@@ -273,13 +353,11 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
     bool eps_created = false, env_initialized = false;
     ucp_address_t *my_addr = NULL;
     size_t my_addr_len;
-    char *recv_buf = NULL;
     void *rkey_buffer = NULL, *state_rkey_buffer = NULL;
     size_t rkey_buffer_size, state_rkey_buffer_size;
     void *state_base = NULL;
     void * my_info = NULL;
     size_t my_info_len;
-    int disps[comm_size];
     int rkey_sizes[comm_size];
     uint64_t zero = 0;
     size_t info_offset;
@@ -295,7 +373,6 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
         ucp_config_t *config = NULL;
         ucp_params_t context_params;
         ucp_worker_params_t worker_params;
-        ucp_worker_attr_t worker_attr;
 
         status = ucp_config_read("MPI", NULL, &config);
         if (UCS_OK != status) {
@@ -323,7 +400,7 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
                                     UCP_PARAM_FIELD_REQUEST_INIT |
                                     UCP_PARAM_FIELD_REQUEST_SIZE;
         context_params.features = UCP_FEATURE_RMA | UCP_FEATURE_AMO32 | UCP_FEATURE_AMO64;
-        context_params.mt_workers_shared = 0;
+        context_params.mt_workers_shared = 1;
         context_params.estimated_num_eps = ompi_proc_world_size();
         context_params.request_init = internal_req_init;
         context_params.request_size = sizeof(ompi_osc_ucx_internal_request_t);
@@ -339,28 +416,11 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
         assert(mca_osc_ucx_component.ucp_worker == NULL);
         memset(&worker_params, 0, sizeof(worker_params));
         worker_params.field_mask = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
-        worker_params.thread_mode = (mca_osc_ucx_component.enable_mpi_threads == true)
-                                    ? UCS_THREAD_MODE_MULTI : UCS_THREAD_MODE_SINGLE;
+        worker_params.thread_mode = UCS_THREAD_MODE_SINGLE;
         status = ucp_worker_create(mca_osc_ucx_component.ucp_context, &worker_params,
                                    &(mca_osc_ucx_component.ucp_worker));
         if (UCS_OK != status) {
             OSC_UCX_VERBOSE(1, "ucp_worker_create failed: %d", status);
-            ret = OMPI_ERROR;
-            goto error_nomem;
-        }
-
-        /* query UCP worker attributes */
-        worker_attr.field_mask = UCP_WORKER_ATTR_FIELD_THREAD_MODE;
-        status = ucp_worker_query(mca_osc_ucx_component.ucp_worker, &worker_attr);
-        if (UCS_OK != status) {
-            OSC_UCX_VERBOSE(1, "ucp_worker_query failed: %d", status);
-            ret = OMPI_ERROR;
-            goto error_nomem;
-        }
-
-        if (mca_osc_ucx_component.enable_mpi_threads == true &&
-            worker_attr.thread_mode != UCS_THREAD_MODE_MULTI) {
-            OSC_UCX_VERBOSE(1, "ucx does not support multithreading");
             ret = OMPI_ERROR;
             goto error_nomem;
         }
@@ -442,6 +502,11 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
         goto error;
     }
 
+    if (mca_osc_ucx_component.worker_addr_disps == NULL)
+        mca_osc_ucx_component.worker_addr_disps = malloc(comm_size * sizeof(int));
+    if (mca_osc_ucx_component.mem_addr_disps == NULL)
+        mca_osc_ucx_component.mem_addr_disps = malloc(comm_size * sizeof(int));
+
     if (!is_eps_ready) {
         status = ucp_worker_get_address(mca_osc_ucx_component.ucp_worker,
                                         &my_addr, &my_addr_len);
@@ -451,8 +516,10 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
             goto error;
         }
 
+        assert(mca_osc_ucx_component.worker_addr_buf == NULL);
         ret = allgather_len_and_info(my_addr, (int)my_addr_len,
-                                     &recv_buf, disps, module->comm);
+                                     &(mca_osc_ucx_component.worker_addr_buf),
+                                     mca_osc_ucx_component.worker_addr_disps, module->comm);
         if (ret != OMPI_SUCCESS) {
             goto error;
         }
@@ -461,9 +528,10 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
             if (OSC_UCX_GET_EP(module->comm, i) == NULL) {
                 ucp_ep_params_t ep_params;
                 ucp_ep_h ep;
+                info_offset = mca_osc_ucx_component.worker_addr_disps[i];
                 memset(&ep_params, 0, sizeof(ucp_ep_params_t));
                 ep_params.field_mask = UCP_EP_PARAM_FIELD_REMOTE_ADDRESS;
-                ep_params.address = (ucp_address_t *)&(recv_buf[disps[i]]);
+                ep_params.address = (ucp_address_t *)&(mca_osc_ucx_component.worker_addr_buf[info_offset]);
                 status = ucp_ep_create(mca_osc_ucx_component.ucp_worker, &ep_params, &ep);
                 if (status != UCS_OK) {
                     OSC_UCX_VERBOSE(1, "ucp_ep_create failed: %d", status);
@@ -477,9 +545,6 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
 
         ucp_worker_release_address(mca_osc_ucx_component.ucp_worker, my_addr);
         my_addr = NULL;
-        free(recv_buf);
-        recv_buf = NULL;
-
         eps_created = true;
     }
 
@@ -549,7 +614,10 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
 
     assert(my_info_len == info_offset);
 
-    ret = allgather_len_and_info(my_info, (int)my_info_len, &recv_buf, disps, module->comm);
+    assert(mca_osc_ucx_component.mem_addr_buf == NULL);
+    ret = allgather_len_and_info(my_info, (int)my_info_len,
+                                 &mca_osc_ucx_component.mem_addr_buf,
+                                 mca_osc_ucx_component.mem_addr_disps, module->comm);
     if (ret != OMPI_SUCCESS) {
         goto error;
     }
@@ -566,18 +634,20 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
         uint64_t dest_size;
         assert(ep != NULL);
 
-        info_offset = disps[i];
+        info_offset = mca_osc_ucx_component.mem_addr_disps[i];
 
-        memcpy(&(module->win_info_array[i]).addr, &recv_buf[info_offset], sizeof(uint64_t));
+        memcpy(&(module->win_info_array[i]).addr,
+               &mca_osc_ucx_component.mem_addr_buf[info_offset], sizeof(uint64_t));
         info_offset += sizeof(uint64_t);
-        memcpy(&(module->state_info_array[i]).addr, &recv_buf[info_offset], sizeof(uint64_t));
+        memcpy(&(module->state_info_array[i]).addr,
+               &mca_osc_ucx_component.mem_addr_buf[info_offset], sizeof(uint64_t));
         info_offset += sizeof(uint64_t);
-        memcpy(&dest_size, &recv_buf[info_offset], sizeof(uint64_t));
+        memcpy(&dest_size, &mca_osc_ucx_component.mem_addr_buf[info_offset], sizeof(uint64_t));
         info_offset += sizeof(uint64_t);
 
         (module->win_info_array[i]).rkey_init = false;
         if (dest_size > 0 && (flavor == MPI_WIN_FLAVOR_ALLOCATE || flavor == MPI_WIN_FLAVOR_CREATE)) {
-            status = ucp_ep_rkey_unpack(ep, &recv_buf[info_offset],
+            status = ucp_ep_rkey_unpack(ep, &mca_osc_ucx_component.mem_addr_buf[info_offset],
                                         &((module->win_info_array[i]).rkey));
             if (status != UCS_OK) {
                 OSC_UCX_VERBOSE(1, "ucp_ep_rkey_unpack failed: %d", status);
@@ -588,7 +658,7 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
             (module->win_info_array[i]).rkey_init = true;
         }
 
-        status = ucp_ep_rkey_unpack(ep, &recv_buf[info_offset],
+        status = ucp_ep_rkey_unpack(ep, &mca_osc_ucx_component.mem_addr_buf[info_offset],
                                     &((module->state_info_array[i]).rkey));
         if (status != UCS_OK) {
             OSC_UCX_VERBOSE(1, "ucp_ep_rkey_unpack failed: %d", status);
@@ -599,7 +669,6 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
     }
 
     free(my_info);
-    free(recv_buf);
 
     if (rkey_buffer_size != 0) {
         ucp_rkey_buffer_release(rkey_buffer);
@@ -656,7 +725,6 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
 
  error:
     if (my_addr) ucp_worker_release_address(mca_osc_ucx_component.ucp_worker, my_addr);
-    if (recv_buf) free(recv_buf);
     if (my_info) free(my_info);
     for (i = 0; i < comm_size; i++) {
         if ((module->win_info_array[i]).rkey != NULL) {

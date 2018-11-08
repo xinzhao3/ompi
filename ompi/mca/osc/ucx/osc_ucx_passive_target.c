@@ -294,11 +294,29 @@ int ompi_osc_ucx_flush(int target, struct ompi_win_t *win) {
         return OMPI_ERR_RMA_SYNC;
     }
 
+    pthread_mutex_lock(&mca_osc_ucx_component.worker_mutex);
     ep = OSC_UCX_GET_EP(module->comm, target);
     ret = opal_common_ucx_ep_flush(ep, mca_osc_ucx_component.ucp_worker);
     if (ret != OMPI_SUCCESS) {
         return ret;
     }
+    pthread_mutex_unlock(&mca_osc_ucx_component.worker_mutex);
+
+
+    pthread_mutex_lock(&active_workers_mutex);
+    if (!opal_list_is_empty(&active_workers)) {
+        thread_local_info_t *curr_worker, *next;
+        OPAL_LIST_FOREACH_SAFE(curr_worker, next, &active_workers, thread_local_info_t) {
+            pthread_mutex_lock(&curr_worker->lock);
+            ep = curr_worker->eps[target];
+            ret = opal_common_ucx_ep_flush(ep, curr_worker->worker);
+            if (ret != OMPI_SUCCESS) {
+                return ret;
+            }
+            pthread_mutex_unlock(&curr_worker->lock);
+        }
+    }
+    pthread_mutex_unlock(&active_workers_mutex);
 
     module->global_ops_num -= module->per_target_ops_nums[target];
     module->per_target_ops_nums[target] = 0;
@@ -315,10 +333,26 @@ int ompi_osc_ucx_flush_all(struct ompi_win_t *win) {
         return OMPI_ERR_RMA_SYNC;
     }
 
+    pthread_mutex_lock(&mca_osc_ucx_component.worker_mutex);
     ret = opal_common_ucx_worker_flush(mca_osc_ucx_component.ucp_worker);
     if (ret != OMPI_SUCCESS) {
         return ret;
     }
+    pthread_mutex_unlock(&mca_osc_ucx_component.worker_mutex);
+
+    pthread_mutex_lock(&active_workers_mutex);
+    if (!opal_list_is_empty(&active_workers)) {
+        thread_local_info_t *curr_worker, *next;
+        OPAL_LIST_FOREACH_SAFE(curr_worker, next, &active_workers, thread_local_info_t) {
+            pthread_mutex_lock(&curr_worker->lock);
+            ret = opal_common_ucx_worker_flush(curr_worker->worker);
+            if (ret != OMPI_SUCCESS) {
+                return ret;
+            }
+            pthread_mutex_unlock(&curr_worker->lock);
+        }
+    }
+    pthread_mutex_unlock(&active_workers_mutex);
 
     module->global_ops_num = 0;
     memset(module->per_target_ops_nums, 0,
