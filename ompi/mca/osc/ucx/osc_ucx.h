@@ -40,6 +40,12 @@ typedef struct ompi_osc_ucx_component {
     int num_incomplete_req_ops;
     int num_modules;
     unsigned int priority;
+    pthread_mutex_t worker_mutex;
+    char *worker_addr_buf;
+    int *worker_addr_disps;
+    char *mem_addr_buf;
+    int *mem_addr_disps;
+    pthread_t main_tid;
 } ompi_osc_ucx_component_t;
 
 OMPI_DECLSPEC extern ompi_osc_ucx_component_t mca_osc_ucx_component;
