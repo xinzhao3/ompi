@@ -122,8 +122,6 @@ typedef struct {
     opal_mutex_t mutex;
     opal_common_ucx_ctx_t *ctx; /* which ctx this mem_reg belongs to */
     ucp_mem_h memh;
-    void *rkey_addr;
-    size_t rkey_addr_len;
     opal_list_t mem_regions; /* mem region lists */
     char *mem_addrs;
     int *mem_displs;

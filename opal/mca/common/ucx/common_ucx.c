@@ -571,6 +571,8 @@ OPAL_DECLSPEC int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int com
                                              opal_common_ucx_mem_t **mem_ptr)
 {
     opal_common_ucx_mem_t *mem = calloc(1, sizeof(*mem));
+    void *rkey_addr = NULL;
+    size_t rkey_addr_len;
     ucs_status_t status;
     int ret = OPAL_SUCCESS;
 
@@ -589,24 +591,23 @@ OPAL_DECLSPEC int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int com
     }
 
     status = ucp_rkey_pack(ctx->wpool->ucp_ctx, mem->memh,
-                           &mem->rkey_addr, &mem->rkey_addr_len);
+                           &rkey_addr, &rkey_addr_len);
     if (status != UCS_OK) {
         MCA_COMMON_UCX_VERBOSE(1, "ucp_rkey_pack failed: %d", status);
         ret = OPAL_ERROR;
         goto error_rkey_pack;
     }
 
-    ret = exchange_func(mem->rkey_addr, mem->rkey_addr_len,
+    ret = exchange_func(rkey_addr, rkey_addr_len,
                         &mem->mem_addrs, &mem->mem_displs, exchange_metadata);
+    ucp_rkey_buffer_release(rkey_addr);
     if (ret != OPAL_SUCCESS) {
-        goto error_exchange;
+        goto error_rkey_pack;
     }
 
     (*mem_ptr) = mem;
     return ret;
 
- error_exchange:
-    ucp_rkey_buffer_release(mem->rkey_addr);
  error_rkey_pack:
     ucp_mem_unmap(ctx->wpool->ucp_ctx, mem->memh);
  error_mem_map:
