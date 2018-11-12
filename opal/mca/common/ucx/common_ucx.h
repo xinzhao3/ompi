@@ -104,6 +104,7 @@ typedef struct {
     ucp_address_t *recv_waddr;
     size_t recv_waddr_len;
     int cur_ctxid, cur_memid;
+    opal_list_t tls_list;
 } opal_common_ucx_wpool_t;
 
 typedef struct {
