@@ -32,7 +32,7 @@ typedef struct {
     int ctx_id;
     int is_freed;
     opal_common_ucx_ctx_t *gctx;
-    _worker_info_t *worker;
+    _worker_info_t *winfo;
 } _tlocal_ctx_t;
 
 OBJ_CLASS_DECLARATION(_tlocal_ctx_t);
@@ -63,7 +63,7 @@ OBJ_CLASS_INSTANCE(_idle_list_item_t, opal_list_item_t, NULL, NULL);
 
 typedef struct {
     opal_list_item_t super;
-    _worker_info_t *ptr;
+    _tlocal_ctx_t *ptr;
 } _worker_list_item_t;
 
 OBJ_CLASS_DECLARATION(_worker_list_item_t);
@@ -708,7 +708,7 @@ static _worker_info_t *_tlocal_add_ctx(_tlocal_table_t *tls,
     tls->ctx_tbl[i]->ctx_id = ctx->ctx_id;
     tls->ctx_tbl[i]->gctx = ctx;
     tls->ctx_tbl[i]->is_freed = 0;
-    tls->ctx_tbl[i]->worker = _get_new_worker(tls);
+    tls->ctx_tbl[i]->winfo = _get_new_worker(tls, ctx);
 
     /* Make sure that we completed all the data structures before
              * placing the item to the list
@@ -725,7 +725,7 @@ static _worker_info_t *_tlocal_add_ctx(_tlocal_table_t *tls,
 static int _tlocal_ctx_connect(_tlocal_ctx_t *ctx, int target)
 {
     ucp_ep_params_t ep_params;
-    _worker_info_t *winfo = ctx->worker;
+    _worker_info_t *winfo = ctx->winfo;
     opal_common_ucx_ctx_t *gctx = ctx->gctx;
     int displ;
 
@@ -879,3 +879,23 @@ OPAL_DECLSPEC int opal_common_ucx_mem_op(opal_common_ucx_mem_t *mem,
     opal_mutex_unlock(worker_info->mutex);
 }
 
+int opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
+                              opal_common_ucx_flush_scope_t scope,
+                              int target)
+{
+    _worker_list_item_t *item;
+    opal_mutex_lock(&mem->ctx->mutex);
+    OPAL_LIST_FOREACH(item, &ctx->workers, _worker_list_item_t) {
+        switch (scope) {
+        case OPAL_COMMON_UCX_SCOPE_WORKER:
+            opal_common_ucx_worker_flush(item->ptr->winfo->worker);
+            break;
+        case OPAL_COMMON_UCX_SCOPE_EP:
+            if (NULL != item->ptr->winfo->endpoints[target] ) {
+                opal_common_ucx_ep_flush(item->ptr->winfo->endpoints[target],
+                                         item->ptr->winfo->worker);
+            }
+        }
+    }
+    opal_mutex_unlock(&mem->ctx->mutex);
+}
