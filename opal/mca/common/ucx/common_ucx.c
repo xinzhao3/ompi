@@ -24,20 +24,21 @@ typedef struct  {
     ucp_worker_h worker;
     ucp_ep_h *endpoints;
     int comm_size;
-} _worker_engine_t;
+} _worker_info_t;
 
-OBJ_CLASS_DECLARATION(_worker_engine_t);
+OBJ_CLASS_DECLARATION(_worker_info_t);
 
 typedef struct {
     int ctx_id;
+    int is_freed;
     opal_common_ucx_ctx_t *gctx;
-    _worker_engine_t *worker;
+    _worker_info_t *worker;
 } _tlocal_ctx_t;
 
 OBJ_CLASS_DECLARATION(_tlocal_ctx_t);
 
 typedef struct {
-    _worker_engine_t *worker;
+    _worker_info_t *worker;
     ucp_rkey_h *rkeys;
 } _mem_info_t;
 
@@ -53,7 +54,7 @@ OBJ_CLASS_DECLARATION(_tlocal_mem_t);
 
 typedef struct {
     opal_list_item_t super;
-    _worker_engine_t *ptr;
+    _worker_info_t *ptr;
 } _idle_list_item_t;
 
 OBJ_CLASS_DECLARATION(_idle_list_item_t);
@@ -61,7 +62,7 @@ OBJ_CLASS_INSTANCE(_idle_list_item_t, opal_list_item_t, NULL, NULL);
 
 typedef struct {
     opal_list_item_t super;
-    _worker_engine_t *ptr;
+    _worker_info_t *ptr;
 } _worker_list_item_t;
 
 OBJ_CLASS_DECLARATION(_worker_list_item_t);
@@ -77,11 +78,16 @@ OBJ_CLASS_INSTANCE(_mem_region_list_item_t, opal_list_item_t, NULL, NULL);
 
 /* thread-local table */
 typedef struct {
+    opal_list_item_t super;
+    opal_common_ucx_wpool_t *wpool;
     _tlocal_ctx_t **ctx_tbl;
     size_t ctx_tbl_size;
     _tlocal_mem_t **mem_tbl;
     size_t mem_tbl_size;
 } _tlocal_table_t;
+
+OBJ_CLASS_DECLARATION(_tlocal_table_t);
+OBJ_CLASS_INSTANCE(_tlocal_table_t, opal_list_item_t, NULL, NULL);
 
 static pthread_key_t _tlocal_key = {0};
 
@@ -312,7 +318,7 @@ static ucp_worker_h _create_ctx_worker(opal_common_ucx_wpool_t *wpool)
 }
 
 static void _wpool_add_to_idle(opal_common_ucx_wpool_t *wpool,
-                               _worker_engine_t *wkr)
+                               _worker_info_t *wkr)
 {
     _idle_list_item_t *item;
 
@@ -334,9 +340,9 @@ static void _wpool_add_to_idle(opal_common_ucx_wpool_t *wpool,
     opal_mutex_unlock(&wpool->mutex);
 }
 
-static _worker_engine_t* _wpool_remove_from_idle(opal_common_ucx_wpool_t *wpool)
+static _worker_info_t* _wpool_remove_from_idle(opal_common_ucx_wpool_t *wpool)
 {
-    _worker_engine_t *wkr = NULL;
+    _worker_info_t *wkr = NULL;
     _idle_list_item_t *item = NULL;
 
     opal_mutex_lock(&wpool->mutex);
@@ -362,7 +368,7 @@ OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
 {
     ucp_config_t *config = NULL;
     ucp_params_t context_params;
-    _worker_engine_t *wkr;
+    _worker_info_t *wkr;
     ucs_status_t status;
     int ret = OPAL_SUCCESS;
 
@@ -405,7 +411,7 @@ OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
         goto err_worker_create;
     }
 
-    wkr = OBJ_NEW(_worker_engine_t);
+    wkr = OBJ_NEW(_worker_info_t);
     OBJ_CONSTRUCT(&wkr->mutex, opal_mutex_t);
     wkr->worker = wpool->recv_worker;
     wkr->endpoints = NULL;
