@@ -96,6 +96,44 @@ typedef struct opal_common_ucx_del_proc {
 
 extern opal_common_ucx_module_t opal_common_ucx;
 
+typedef struct {
+    ucp_context_h ucp_ctx;
+    opal_mutex_t mutex;
+    opal_list_t idle_workers;
+    ucp_worker_h recv_worker;
+    ucp_address_t *recv_waddr;
+    size_t recv_waddr_len;
+    int cur_ctxid, cur_memid;
+} opal_common_ucx_wpool_t;
+
+typedef struct {
+    int ctx_id;
+    opal_mutex_t mutex;
+    opal_common_ucx_wpool_t *wpool; /* which wpool this ctx belongs to */
+    opal_list_t workers; /* active worker lists */
+    char *recv_worker_addrs;
+    int *recv_worker_displs;
+} opal_common_ucx_ctx_t;
+
+typedef struct {
+    int mem_id;
+    opal_mutex_t mutex;
+    opal_common_ucx_ctx_t *ctx; /* which ctx this mem_reg belongs to */
+    opal_list_t mem_regions; /* mem region lists */
+    char *mem_addrs;
+    int *mem_displs;
+} opal_common_ucx_mem_t;
+
+typedef enum {
+    OPAL_COMMON_UCX_PUT,
+    OPAL_COMMON_UCX_GET
+} opal_common_ucx_op_t;
+
+typedef enum {
+    OPAL_COMMON_UCX_SCOPE_EP,
+    OPAL_COMMON_UCX_SCOPE_WORKER
+} opal_common_ucx_flush_scope_t;
+
 OPAL_DECLSPEC void opal_common_ucx_mca_register(void);
 OPAL_DECLSPEC void opal_common_ucx_mca_deregister(void);
 OPAL_DECLSPEC void opal_common_ucx_empty_complete_cb(void *request, ucs_status_t status);

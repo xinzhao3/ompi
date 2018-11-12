@@ -19,6 +19,74 @@
 
 /***********************************************************************/
 
+typedef struct  {
+    opal_mutex_t mutex;
+    ucp_worker_h worker;
+    ucp_ep_h *endpoints;
+    int comm_size;
+} _worker_engine_t;
+
+OBJ_CLASS_DECLARATION(_worker_engine_t);
+
+typedef struct {
+    int ctx_id;
+    opal_common_ucx_ctx_t *gctx;
+    _worker_engine_t *worker;
+} _tlocal_ctx_t;
+
+OBJ_CLASS_DECLARATION(_tlocal_ctx_t);
+
+typedef struct {
+    _worker_engine_t *worker;
+    ucp_rkey_h *rkeys;
+} _mem_info_t;
+
+OBJ_CLASS_DECLARATION(_mem_info_t);
+
+typedef struct {
+    int mem_id;
+    opal_common_ucx_mem_t *gmem;
+    _mem_info_t *mem;
+} _tlocal_mem_t;
+
+OBJ_CLASS_DECLARATION(_tlocal_mem_t);
+
+typedef struct {
+    opal_list_item_t super;
+    _worker_engine_t *ptr;
+} _idle_list_item_t;
+
+OBJ_CLASS_DECLARATION(_idle_list_item_t);
+OBJ_CLASS_INSTANCE(_idle_list_item_t, opal_list_item_t, NULL, NULL);
+
+typedef struct {
+    opal_list_item_t super;
+    _worker_engine_t *ptr;
+} _worker_list_item_t;
+
+OBJ_CLASS_DECLARATION(_worker_list_item_t);
+OBJ_CLASS_INSTANCE(_worker_list_item_t, opal_list_item_t, NULL, NULL);
+
+typedef struct {
+    opal_list_item_t super;
+    _mem_info_t *ptr;
+} _mem_region_list_item_t;
+
+OBJ_CLASS_DECLARATION(_mem_region_list_item_t);
+OBJ_CLASS_INSTANCE(_mem_region_list_item_t, opal_list_item_t, NULL, NULL);
+
+/* thread-local table */
+typedef struct {
+    _tlocal_ctx_t **ctx_tbl;
+    size_t ctx_tbl_size;
+    _tlocal_mem_t **mem_tbl;
+    size_t mem_tbl_size;
+} _tlocal_table_t;
+
+static pthread_key_t _tlocal_key = {0};
+
+/***********************************************************************/
+
 extern mca_base_framework_t opal_memory_base_framework;
 
 opal_common_ucx_module_t opal_common_ucx = {
