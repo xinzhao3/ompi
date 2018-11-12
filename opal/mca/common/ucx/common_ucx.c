@@ -360,6 +360,16 @@ static _worker_info_t* _wpool_remove_from_idle(opal_common_ucx_wpool_t *wpool)
     return wkr;
 }
 
+OPAL_DECLSPEC opal_common_ucx_wpool_t * opal_common_ucx_wpool_allocate()
+{
+    opal_common_ucx_wpool_t *ptr = calloc(1, sizeof(opal_common_ucx_wpool_t *));
+    return ptr;
+}
+
+OPAL_DECLSPEC void opal_common_ucx_wpool_free(opal_common_ucx_wpool_t *wpool)
+{
+    free(wpool);
+}
 
 OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
                                              int proc_world_size,
@@ -438,5 +448,171 @@ OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
  err_worker_create:
     ucp_cleanup(wpool->ucp_ctx);
  err_ucp_init:
+    return ret;
+}
+
+
+OPAL_DECLSPEC void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
+{
+    /* Go over the list, free idle list items */
+    opal_mutex_lock(&wpool->mutex);
+    if (!opal_list_is_empty(&wpool->idle_workers)) {
+        _idle_list_item_t *item, *next;
+        OPAL_LIST_FOREACH_SAFE(item, next, &wpool->idle_workers, _idle_list_item_t) {
+            _worker_info_t *curr_worker;
+            opal_list_remove_item(&wpool->idle_workers, &item->super);
+            curr_worker = item->ptr;
+            OBJ_DESTRUCT(&curr_worker->mutex);
+            ucp_worker_destroy(curr_worker->worker);
+            OBJ_RELEASE(curr_worker);
+            OBJ_RELEASE(item);
+        }
+    }
+    opal_mutex_unlock(&wpool->mutex);
+
+    OBJ_DESTRUCT(&wpool->idle_workers);
+
+    OBJ_DESTRUCT(&wpool->mutex);
+    ucp_worker_release_address(wpool->recv_worker, wpool->recv_waddr);
+    ucp_worker_destroy(wpool->recv_worker);
+    ucp_cleanup(wpool->ucp_ctx);
+}
+
+OPAL_DECLSPEC int opal_common_ucx_ctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
+                                             opal_common_ucx_exchange_func_t exchange_func,
+                                             void *exchange_metadata,
+                                             opal_common_ucx_ctx_t **ctx_ptr)
+{
+    opal_common_ucx_ctx_t *ctx = calloc(1, sizeof(*ctx));
+    int ret = OPAL_SUCCESS;
+
+    ctx->ctx_id = OPAL_ATOMIC_ADD_FETCH32(&ctx->ctx_id, 1);
+
+    OBJ_CONSTRUCT(&ctx->mutex, opal_mutex_t);
+    OBJ_CONSTRUCT(&ctx->workers, opal_list_t);
+    ctx->wpool = wpool;
+    ctx->comm_size = comm_size;
+
+    ctx->recv_worker_addrs = NULL;
+    ctx->recv_worker_displs = NULL;
+    ret = exchange_func(wpool->recv_waddr, wpool->recv_waddr_len,
+                        &ctx->recv_worker_addrs,
+                        &ctx->recv_worker_displs, exchange_metadata);
+    if (ret != OPAL_SUCCESS) {
+        goto error;
+    }
+
+    (*ctx_ptr) = ctx;
+    return ret;
+
+ error:
+    OBJ_DESTRUCT(&ctx->mutex);
+    OBJ_DESTRUCT(&ctx->workers);
+    free(ctx);
+    (*ctx_ptr) = NULL;
+    return ret;
+}
+
+static int _comm_ucx_mem_map(opal_common_ucx_wpool_t *wpool,
+                             void **base, size_t size, ucp_mem_h *memh_ptr,
+                             opal_common_ucx_mem_type_t mem_type)
+{
+    ucp_mem_map_params_t mem_params;
+    ucp_mem_attr_t mem_attrs;
+    ucs_status_t status;
+    int ret = OPAL_SUCCESS;
+
+    memset(&mem_params, 0, sizeof(ucp_mem_map_params_t));
+    mem_params.field_mask = UCP_MEM_MAP_PARAM_FIELD_ADDRESS |
+                            UCP_MEM_MAP_PARAM_FIELD_LENGTH |
+                            UCP_MEM_MAP_PARAM_FIELD_FLAGS;
+    mem_params.length = size;
+    if (mem_type == OPAL_COMMON_UCX_MEM_ALLOCATE_MAP) {
+        mem_params.address = NULL;
+        mem_params.flags = UCP_MEM_MAP_ALLOCATE;
+    } else {
+        mem_params.address = (*base);
+    }
+
+    status = ucp_mem_map(wpool->ucp_ctx, &mem_params, memh_ptr);
+    if (status != UCS_OK) {
+        MCA_COMMON_UCX_VERBOSE(1, "ucp_mem_map failed: %d", status);
+        ret = OPAL_ERROR;
+        goto error;
+    }
+
+    mem_attrs.field_mask = UCP_MEM_ATTR_FIELD_ADDRESS | UCP_MEM_ATTR_FIELD_LENGTH;
+    status = ucp_mem_query((*memh_ptr), &mem_attrs);
+    if (status != UCS_OK) {
+        MCA_COMMON_UCX_VERBOSE(1, "ucp_mem_query failed: %d", status);
+        ret = OPAL_ERROR;
+        goto error;
+    }
+
+    assert(mem_attrs.length >= size);
+    if (mem_type != OPAL_COMMON_UCX_MEM_ALLOCATE_MAP) {
+        assert(mem_attrs.address == (*base));
+    } else {
+        (*base) = mem_attrs.address;
+    }
+
+    return ret;
+ error:
+    ucp_mem_unmap(wpool->ucp_ctx, (*memh_ptr));
+    return ret;
+}
+
+
+OPAL_DECLSPEC int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int comm_size,
+                                             void **mem_base, size_t mem_size,
+                                             opal_common_ucx_mem_type_t mem_type,
+                                             opal_common_ucx_exchange_func_t exchange_func,
+                                             void *exchange_metadata,
+                                             opal_common_ucx_mem_t **mem_ptr)
+{
+    opal_common_ucx_mem_t *mem = calloc(1, sizeof(*mem));
+    ucs_status_t status;
+    int ret = OPAL_SUCCESS;
+
+    mem->mem_id = OPAL_ATOMIC_ADD_FETCH32(&mem->mem_id, 1);
+    OBJ_CONSTRUCT(&mem->mutex, opal_mutex_t);
+    OBJ_CONSTRUCT(&mem->mem_regions, opal_list_t);
+    mem->ctx = ctx;
+    mem->comm_size = comm_size;
+    mem->mem_addrs = NULL;
+    mem->mem_displs = NULL;
+
+    ret = _comm_ucx_mem_map(ctx->wpool, mem_base, mem_size, &mem->memh, mem_type);
+    if (ret != OPAL_SUCCESS) {
+        MCA_COMMON_UCX_VERBOSE(1, "_comm_ucx_mem_map failed: %d", ret);
+        goto error_mem_map;
+    }
+
+    status = ucp_rkey_pack(ctx->wpool->ucp_ctx, mem->memh,
+                           &mem->rkey_addr, &mem->rkey_addr_len);
+    if (status != UCS_OK) {
+        MCA_COMMON_UCX_VERBOSE(1, "ucp_rkey_pack failed: %d", status);
+        ret = OPAL_ERROR;
+        goto error_rkey_pack;
+    }
+
+    ret = exchange_func(mem->rkey_addr, mem->rkey_addr_len,
+                        &mem->mem_addrs, &mem->mem_displs, exchange_metadata);
+    if (ret != OPAL_SUCCESS) {
+        goto error_exchange;
+    }
+
+    (*mem_ptr) = mem;
+    return ret;
+
+ error_exchange:
+    ucp_rkey_buffer_release(mem->rkey_addr);
+ error_rkey_pack:
+    ucp_mem_unmap(ctx->wpool->ucp_ctx, mem->memh);
+ error_mem_map:
+    OBJ_DESTRUCT(&mem->mutex);
+    OBJ_DESTRUCT(&mem->mem_regions);
+    free(mem);
+    (*mem_ptr) = NULL;
     return ret;
 }

@@ -149,6 +149,25 @@ typedef int (*opal_common_ucx_exchange_func_t)(void *my_info, size_t my_info_len
                                                char **recv_info, int **disps,
                                                void *metadata);
 
+OPAL_DECLSPEC opal_common_ucx_wpool_t * opal_common_ucx_wpool_allocate();
+OPAL_DECLSPEC void opal_common_ucx_wpool_free(opal_common_ucx_wpool_t *wpool);
+OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
+                                             int proc_world_size,
+                                             ucp_request_init_callback_t req_init_ptr,
+                                             size_t req_size);
+OPAL_DECLSPEC void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool);
+OPAL_DECLSPEC int opal_common_ucx_ctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
+                                             opal_common_ucx_exchange_func_t exchange_func,
+                                             void *exchange_metadata,
+                                             opal_common_ucx_ctx_t **ctx_ptr);
+OPAL_DECLSPEC int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int comm_size,
+                                             void **mem_base, size_t mem_size,
+                                             opal_common_ucx_mem_type_t mem_type,
+                                             opal_common_ucx_exchange_func_t exchange_func,
+                                             void *exchange_metadata,
+                                             opal_common_ucx_mem_t **mem_ptr);
+
+
 OPAL_DECLSPEC void opal_common_ucx_mca_register(void);
 OPAL_DECLSPEC void opal_common_ucx_mca_deregister(void);
 OPAL_DECLSPEC void opal_common_ucx_empty_complete_cb(void *request, ucs_status_t status);
