@@ -1226,3 +1226,7 @@ opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
     }
     opal_mutex_unlock(&ctx->mutex);
 }
+
+OPAL_DECLSPEC int opal_common_ucx_workers_progress(opal_common_ucx_wpool_t *wpool) {
+    // TODO
+}

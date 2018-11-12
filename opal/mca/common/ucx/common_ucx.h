@@ -165,7 +165,7 @@ OPAL_DECLSPEC int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int com
                                              opal_common_ucx_exchange_func_t exchange_func,
                                              void *exchange_metadata,
                                              opal_common_ucx_mem_t **mem_ptr);
-
+OPAL_DECLSPEC int opal_common_ucx_workers_progress(opal_common_ucx_wpool_t *wpool);
 
 
 OPAL_DECLSPEC void opal_common_ucx_mca_register(void);
