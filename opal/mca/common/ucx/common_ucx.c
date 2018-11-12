@@ -380,7 +380,7 @@ OPAL_DECLSPEC void opal_common_ucx_wpool_free(opal_common_ucx_wpool_t *wpool)
 OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
                                              int proc_world_size,
                                              ucp_request_init_callback_t req_init_ptr,
-                                             size_t req_size)
+                                             size_t req_size, bool enable_mt)
 {
     ucp_config_t *config = NULL;
     ucp_params_t context_params;
@@ -405,7 +405,7 @@ OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
                                 UCP_PARAM_FIELD_REQUEST_INIT |
                                 UCP_PARAM_FIELD_REQUEST_SIZE;
     context_params.features = UCP_FEATURE_RMA | UCP_FEATURE_AMO32 | UCP_FEATURE_AMO64;
-    context_params.mt_workers_shared = 1;
+    context_params.mt_workers_shared = (enable_mt ? 1 : 0);
     context_params.estimated_num_eps = proc_world_size;
     context_params.request_init = req_init_ptr;
     context_params.request_size = req_size;

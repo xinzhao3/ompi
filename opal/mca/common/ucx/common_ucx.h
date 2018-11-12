@@ -97,6 +97,7 @@ typedef struct opal_common_ucx_del_proc {
 extern opal_common_ucx_module_t opal_common_ucx;
 
 typedef struct {
+    int refcnt;
     ucp_context_h ucp_ctx;
     opal_mutex_t mutex;
     opal_list_t idle_workers;
@@ -152,7 +153,7 @@ OPAL_DECLSPEC void opal_common_ucx_wpool_free(opal_common_ucx_wpool_t *wpool);
 OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
                                              int proc_world_size,
                                              ucp_request_init_callback_t req_init_ptr,
-                                             size_t req_size);
+                                             size_t req_size, bool enable_mt);
 OPAL_DECLSPEC void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool);
 OPAL_DECLSPEC int opal_common_ucx_ctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
                                              opal_common_ucx_exchange_func_t exchange_func,
