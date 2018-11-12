@@ -108,7 +108,7 @@ typedef struct {
 } opal_common_ucx_wpool_t;
 
 typedef struct {
-    int ctx_id;
+    opal_atomic_int32_t ctx_id;
     opal_mutex_t mutex;
     opal_common_ucx_wpool_t *wpool; /* which wpool this ctx belongs to */
     opal_list_t workers; /* active worker lists */
@@ -118,7 +118,7 @@ typedef struct {
 } opal_common_ucx_ctx_t;
 
 typedef struct {
-    int mem_id;
+    opal_atomic_int32_t mem_id;
     opal_mutex_t mutex;
     opal_common_ucx_ctx_t *ctx; /* which ctx this mem_reg belongs to */
     ucp_mem_h memh;
@@ -147,7 +147,7 @@ typedef int (*opal_common_ucx_exchange_func_t)(void *my_info, size_t my_info_len
                                                char **recv_info, int **disps,
                                                void *metadata);
 
-OPAL_DECLSPEC opal_common_ucx_wpool_t * opal_common_ucx_wpool_allocate();
+OPAL_DECLSPEC opal_common_ucx_wpool_t * opal_common_ucx_wpool_allocate(void);
 OPAL_DECLSPEC void opal_common_ucx_wpool_free(opal_common_ucx_wpool_t *wpool);
 OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
                                              int proc_world_size,
