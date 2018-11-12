@@ -54,8 +54,7 @@ ompi_osc_ucx_component_t mca_osc_ucx_component = {
         .osc_select = component_select,
         .osc_finalize = component_finalize,
     },
-    .ucp_context            = NULL,
-    .ucp_worker             = NULL,
+    .wpool                  = NULL,
     .env_initialized        = false,
     .num_incomplete_req_ops = 0,
     .num_modules            = 0
@@ -120,37 +119,22 @@ static int component_register(void) {
 }
 
 static int progress_callback(void) {
-    ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+    if (mca_osc_ucx_component.wpool != NULL) {
+        opal_common_ucx_workers_progress(mca_osc_ucx_component.wpool);
+    }
     return 0;
 }
 
 static int component_init(bool enable_progress_threads, bool enable_mpi_threads) {
     mca_osc_ucx_component.enable_mpi_threads = enable_mpi_threads;
-
+    mca_osc_ucx_component.wpool = opal_common_ucx_wpool_allocate();
     opal_common_ucx_mca_register();
     return OMPI_SUCCESS;
 }
 
 static int component_finalize(void) {
-    int i;
-    for (i = 0; i < ompi_proc_world_size(); i++) {
-        ucp_ep_h ep = OSC_UCX_GET_EP(&(ompi_mpi_comm_world.comm), i);
-        if (ep != NULL) {
-            ucp_ep_destroy(ep);
-        }
-    }
-
-    if (mca_osc_ucx_component.ucp_worker != NULL) {
-        ucp_worker_destroy(mca_osc_ucx_component.ucp_worker);
-    }
-
-    assert(mca_osc_ucx_component.num_incomplete_req_ops == 0);
-    if (mca_osc_ucx_component.env_initialized == true) {
-        OBJ_DESTRUCT(&mca_osc_ucx_component.requests);
-        ucp_cleanup(mca_osc_ucx_component.ucp_context);
-        mca_osc_ucx_component.env_initialized = false;
-    }
     opal_common_ucx_mca_deregister();
+    opal_common_ucx_wpool_free(mca_osc_ucx_component.wpool);
     return OMPI_SUCCESS;
 }
 
@@ -160,9 +144,11 @@ static int component_query(struct ompi_win_t *win, void **base, size_t size, int
     return mca_osc_ucx_component.priority;
 }
 
-static inline int allgather_len_and_info(void *my_info, int my_info_len, char **recv_info,
-                                         int *disps, struct ompi_communicator_t *comm) {
+static int exchange_len_info(void *my_info, size_t my_info_len, char **recv_info_ptr,
+                             int **disps_ptr, void *metadata)
+{
     int ret = OMPI_SUCCESS;
+    struct ompi_communicator_t *comm = (struct ompi_communicator_t *)metadata;
     int comm_size = ompi_comm_size(comm);
     int lens[comm_size];
     int total_len, i;
@@ -175,74 +161,20 @@ static inline int allgather_len_and_info(void *my_info, int my_info_len, char **
     }
 
     total_len = 0;
+    (*disps_ptr) = (int *)calloc(comm_size, sizeof(int));
     for (i = 0; i < comm_size; i++) {
-        disps[i] = total_len;
+        (*disps_ptr)[i] = total_len;
         total_len += lens[i];
     }
 
-    (*recv_info) = (char *)malloc(total_len);
-
+    (*recv_info_ptr) = (char *)calloc(total_len, sizeof(char));
     ret = comm->c_coll->coll_allgatherv(my_info, my_info_len, MPI_BYTE,
-                                        (void *)(*recv_info), lens, disps, MPI_BYTE,
+                                        (void *)(*recv_info_ptr), lens, (*disps_ptr), MPI_BYTE,
                                         comm, comm->c_coll->coll_allgatherv_module);
     if (OMPI_SUCCESS != ret) {
         return ret;
     }
 
-    return ret;
-}
-
-static inline int mem_map(void **base, size_t size, ucp_mem_h *memh_ptr,
-                          ompi_osc_ucx_module_t *module, int flavor) {
-    ucp_mem_map_params_t mem_params;
-    ucp_mem_attr_t mem_attrs;
-    ucs_status_t status;
-    int ret = OMPI_SUCCESS;
-
-    if (!(flavor == MPI_WIN_FLAVOR_ALLOCATE || flavor == MPI_WIN_FLAVOR_CREATE)
-        || size == 0) {
-        return ret;
-    }
-
-    memset(&mem_params, 0, sizeof(ucp_mem_map_params_t));
-    mem_params.field_mask = UCP_MEM_MAP_PARAM_FIELD_ADDRESS |
-                            UCP_MEM_MAP_PARAM_FIELD_LENGTH |
-                            UCP_MEM_MAP_PARAM_FIELD_FLAGS;
-    mem_params.length = size;
-    if (flavor == MPI_WIN_FLAVOR_ALLOCATE) {
-        mem_params.address = NULL;
-        mem_params.flags = UCP_MEM_MAP_ALLOCATE;
-    } else {
-        mem_params.address = (*base);
-    }
-
-    /* memory map */
-
-    status = ucp_mem_map(mca_osc_ucx_component.ucp_context, &mem_params, memh_ptr);
-    if (status != UCS_OK) {
-        OSC_UCX_VERBOSE(1, "ucp_mem_map failed: %d", status);
-        ret = OMPI_ERROR;
-        goto error;
-    }
-
-    mem_attrs.field_mask = UCP_MEM_ATTR_FIELD_ADDRESS | UCP_MEM_ATTR_FIELD_LENGTH;
-    status = ucp_mem_query((*memh_ptr), &mem_attrs);
-    if (status != UCS_OK) {
-        OSC_UCX_VERBOSE(1, "ucp_mem_query failed: %d", status);
-        ret = OMPI_ERROR;
-        goto error;
-    }
-
-    assert(mem_attrs.length >= size);
-    if (flavor == MPI_WIN_FLAVOR_CREATE) {
-        assert(mem_attrs.address == (*base));
-    } else {
-        (*base) = mem_attrs.address;
-    }
-
-    return ret;
- error:
-    ucp_mem_unmap(mca_osc_ucx_component.ucp_context, (*memh_ptr));
     return ret;
 }
 
@@ -269,21 +201,12 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
     int ret = OMPI_SUCCESS;
     ucs_status_t status;
     int i, comm_size = ompi_comm_size(comm);
-    int is_eps_ready;
-    bool eps_created = false, env_initialized = false;
-    ucp_address_t *my_addr = NULL;
-    size_t my_addr_len;
-    char *recv_buf = NULL;
-    void *rkey_buffer = NULL, *state_rkey_buffer = NULL;
-    size_t rkey_buffer_size, state_rkey_buffer_size;
+    bool env_initialized = false;
     void *state_base = NULL;
-    void * my_info = NULL;
-    size_t my_info_len;
-    int disps[comm_size];
-    int rkey_sizes[comm_size];
+    opal_common_ucx_mem_type_t mem_type;
     uint64_t zero = 0;
-    size_t info_offset;
-    uint64_t size_u64;
+    void * my_info = NULL;
+    char *recv_buf = NULL;
 
     /* the osc/sm component is the exclusive provider for support for
      * shared memory windows */
@@ -292,16 +215,6 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
     }
 
     if (mca_osc_ucx_component.env_initialized == false) {
-        ucp_config_t *config = NULL;
-        ucp_params_t context_params;
-        ucp_worker_params_t worker_params;
-        ucp_worker_attr_t worker_attr;
-
-        status = ucp_config_read("MPI", NULL, &config);
-        if (UCS_OK != status) {
-            OSC_UCX_VERBOSE(1, "ucp_config_read failed: %d", status);
-            return OMPI_ERROR;
-        }
 
         OBJ_CONSTRUCT(&mca_osc_ucx_component.requests, opal_free_list_t);
         ret = opal_free_list_init (&mca_osc_ucx_component.requests,
@@ -314,55 +227,14 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
             goto error;
         }
 
-        /* initialize UCP context */
-
-        memset(&context_params, 0, sizeof(context_params));
-        context_params.field_mask = UCP_PARAM_FIELD_FEATURES |
-                                    UCP_PARAM_FIELD_MT_WORKERS_SHARED |
-                                    UCP_PARAM_FIELD_ESTIMATED_NUM_EPS |
-                                    UCP_PARAM_FIELD_REQUEST_INIT |
-                                    UCP_PARAM_FIELD_REQUEST_SIZE;
-        context_params.features = UCP_FEATURE_RMA | UCP_FEATURE_AMO32 | UCP_FEATURE_AMO64;
-        context_params.mt_workers_shared = 0;
-        context_params.estimated_num_eps = ompi_proc_world_size();
-        context_params.request_init = internal_req_init;
-        context_params.request_size = sizeof(ompi_osc_ucx_internal_request_t);
-
-        status = ucp_init(&context_params, config, &mca_osc_ucx_component.ucp_context);
-        ucp_config_release(config);
-        if (UCS_OK != status) {
-            OSC_UCX_VERBOSE(1, "ucp_init failed: %d", status);
-            ret = OMPI_ERROR;
+        ret = opal_common_ucx_wpool_init(mca_osc_ucx_component.wpool,
+                                         ompi_proc_world_size(),
+                                         internal_req_init,
+                                         sizeof(ompi_osc_ucx_internal_request_t),
+                                         mca_osc_ucx_component.enable_mpi_threads);
+        if (OMPI_SUCCESS != ret) {
+            OSC_UCX_VERBOSE(1, "opal_common_ucx_wpool_init failed: %d", ret);
             goto error;
-        }
-
-        assert(mca_osc_ucx_component.ucp_worker == NULL);
-        memset(&worker_params, 0, sizeof(worker_params));
-        worker_params.field_mask = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
-        worker_params.thread_mode = (mca_osc_ucx_component.enable_mpi_threads == true)
-                                    ? UCS_THREAD_MODE_MULTI : UCS_THREAD_MODE_SINGLE;
-        status = ucp_worker_create(mca_osc_ucx_component.ucp_context, &worker_params,
-                                   &(mca_osc_ucx_component.ucp_worker));
-        if (UCS_OK != status) {
-            OSC_UCX_VERBOSE(1, "ucp_worker_create failed: %d", status);
-            ret = OMPI_ERROR;
-            goto error_nomem;
-        }
-
-        /* query UCP worker attributes */
-        worker_attr.field_mask = UCP_WORKER_ATTR_FIELD_THREAD_MODE;
-        status = ucp_worker_query(mca_osc_ucx_component.ucp_worker, &worker_attr);
-        if (UCS_OK != status) {
-            OSC_UCX_VERBOSE(1, "ucp_worker_query failed: %d", status);
-            ret = OMPI_ERROR;
-            goto error_nomem;
-        }
-
-        if (mca_osc_ucx_component.enable_mpi_threads == true &&
-            worker_attr.thread_mode != UCS_THREAD_MODE_MULTI) {
-            OSC_UCX_VERBOSE(1, "ucx does not support multithreading");
-            ret = OMPI_ERROR;
-            goto error_nomem;
         }
 
         mca_osc_ucx_component.env_initialized = true;
@@ -425,187 +297,72 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
         }
     }
 
-    /* exchange endpoints if necessary */
-    is_eps_ready = 1;
-    for (i = 0; i < comm_size; i++) {
-        if (OSC_UCX_GET_EP(module->comm, i) == NULL) {
-            is_eps_ready = 0;
-            break;
-        }
-    }
-
-    ret = module->comm->c_coll->coll_allreduce(MPI_IN_PLACE, &is_eps_ready, 1, MPI_INT,
-                                               MPI_LAND,
-                                               module->comm,
-                                               module->comm->c_coll->coll_allreduce_module);
+    ret = opal_common_ucx_ctx_create(mca_osc_ucx_component.wpool, comm_size,
+                                     &exchange_len_info, (void *)module->comm,
+                                     &module->ctx);
     if (OMPI_SUCCESS != ret) {
         goto error;
     }
 
-    if (!is_eps_ready) {
-        status = ucp_worker_get_address(mca_osc_ucx_component.ucp_worker,
-                                        &my_addr, &my_addr_len);
-        if (status != UCS_OK) {
-            OSC_UCX_VERBOSE(1, "ucp_worker_get_address failed: %d", status);
-            ret = OMPI_ERROR;
-            goto error;
+    if (flavor == MPI_WIN_FLAVOR_ALLOCATE || flavor == MPI_WIN_FLAVOR_CREATE) {
+        swtich (flavor) {
+        case MPI_WIN_FLAVOR_ALLOCATE:
+            mem_type = OPAL_COMMON_UCX_MEM_ALLOCATE_MAP;
+            break;
+        case MPI_WIN_FLAVOR_CREATE:
+            mem_type = OPAL_COMMON_UCX_MEM_MAP;
+            break;
         }
 
-        ret = allgather_len_and_info(my_addr, (int)my_addr_len,
-                                     &recv_buf, disps, module->comm);
+        ret = opal_common_ucx_mem_create(module->ctx, comm_size, base, size,
+                                         mem_type, &exchange_len_info,
+                                         (void *)module->comm, &module->mem);
         if (ret != OMPI_SUCCESS) {
             goto error;
         }
 
-        for (i = 0; i < comm_size; i++) {
-            if (OSC_UCX_GET_EP(module->comm, i) == NULL) {
-                ucp_ep_params_t ep_params;
-                ucp_ep_h ep;
-                memset(&ep_params, 0, sizeof(ucp_ep_params_t));
-                ep_params.field_mask = UCP_EP_PARAM_FIELD_REMOTE_ADDRESS;
-                ep_params.address = (ucp_address_t *)&(recv_buf[disps[i]]);
-                status = ucp_ep_create(mca_osc_ucx_component.ucp_worker, &ep_params, &ep);
-                if (status != UCS_OK) {
-                    OSC_UCX_VERBOSE(1, "ucp_ep_create failed: %d", status);
-                    ret = OMPI_ERROR;
-                    goto error;
-                }
-
-                ompi_comm_peer_lookup(module->comm, i)->proc_endpoints[OMPI_PROC_ENDPOINT_TAG_UCX] = ep;
-            }
-        }
-
-        ucp_worker_release_address(mca_osc_ucx_component.ucp_worker, my_addr);
-        my_addr = NULL;
-        free(recv_buf);
-        recv_buf = NULL;
-
-        eps_created = true;
-    }
-
-    ret = mem_map(base, size, &(module->memh), module, flavor);
-    if (ret != OMPI_SUCCESS) {
-        goto error;
     }
 
     state_base = (void *)&(module->state);
-    ret = mem_map(&state_base, sizeof(ompi_osc_ucx_state_t), &(module->state_memh),
-                  module, MPI_WIN_FLAVOR_CREATE);
+    ret = opal_common_ucx_mem_create(module->ctx, comm_size, state_base,
+                                     sizeof(ompi_osc_ucx_state_t),
+                                     OPAL_COMMON_UCX_MEM_MAP, &exchange_len_info,
+                                     (void *)module->comm, &module->state_mem);
     if (ret != OMPI_SUCCESS) {
         goto error;
     }
 
-    module->win_info_array = calloc(comm_size, sizeof(ompi_osc_ucx_win_info_t));
-    if (module->win_info_array == NULL) {
-        ret = OMPI_ERR_TEMP_OUT_OF_RESOURCE;
-        goto error;
-    }
-
-    module->state_info_array = calloc(comm_size, sizeof(ompi_osc_ucx_win_info_t));
-    if (module->state_info_array == NULL) {
-        ret = OMPI_ERR_TEMP_OUT_OF_RESOURCE;
-        goto error;
-    }
-
-    if (size > 0 && (flavor == MPI_WIN_FLAVOR_ALLOCATE || flavor == MPI_WIN_FLAVOR_CREATE)) {
-        status = ucp_rkey_pack(mca_osc_ucx_component.ucp_context, module->memh,
-                               &rkey_buffer, &rkey_buffer_size);
-        if (status != UCS_OK) {
-            OSC_UCX_VERBOSE(1, "ucp_rkey_pack failed: %d", status);
-            ret = OMPI_ERROR;
-            goto error;
-        }
-    } else {
-        rkey_buffer_size = 0;
-    }
-
-    status = ucp_rkey_pack(mca_osc_ucx_component.ucp_context, module->state_memh,
-                           &state_rkey_buffer, &state_rkey_buffer_size);
-    if (status != UCS_OK) {
-        OSC_UCX_VERBOSE(1, "ucp_rkey_pack failed: %d", status);
-        ret = OMPI_ERROR;
-        goto error;
-    }
-
-    size_u64 = (uint64_t)size;
-    my_info_len = 3 * sizeof(uint64_t) + rkey_buffer_size + state_rkey_buffer_size;
-    my_info = malloc(my_info_len);
+    /* exchange window addrs */
+    my_info = malloc(2 * sizeof(uint64_t));
     if (my_info == NULL) {
         ret = OMPI_ERR_TEMP_OUT_OF_RESOURCE;
         goto error;
     }
 
-    info_offset = 0;
-
     if (flavor == MPI_WIN_FLAVOR_ALLOCATE || flavor == MPI_WIN_FLAVOR_CREATE) {
-        memcpy_off(my_info, base, sizeof(uint64_t), info_offset);
+        memcpy(my_info, base, sizeof(uint64_t));
     } else {
-        memcpy_off(my_info, &zero, sizeof(uint64_t), info_offset);
+        memcpy(my_info, &zero, sizeof(uint64_t));
     }
-    memcpy_off(my_info, &state_base, sizeof(uint64_t), info_offset);
-    memcpy_off(my_info, &size_u64, sizeof(uint64_t), info_offset);
-    memcpy_off(my_info, rkey_buffer, rkey_buffer_size, info_offset);
-    memcpy_off(my_info, state_rkey_buffer, state_rkey_buffer_size, info_offset);
+    memcpy(my_info + sizeof(uint64_t), &state_base, sizeof(uint64_t));
 
-    assert(my_info_len == info_offset);
-
-    ret = allgather_len_and_info(my_info, (int)my_info_len, &recv_buf, disps, module->comm);
+    recv_buf = (char *)calloc(comm_size, 2 * sizeof(uint64_t));
+    ret = comm->c_coll->coll_allgather((void *)&my_info, 2 * sizeof(uint64_t),
+                                       MPI_BYTE, recv_buf, 2 * sizeof(uint64_t),
+                                       MPI_BYTE, comm, comm->c_coll->coll_allgather_module);
     if (ret != OMPI_SUCCESS) {
         goto error;
     }
 
-    ret = comm->c_coll->coll_allgather((void *)&rkey_buffer_size, 1, MPI_INT,
-                                       rkey_sizes, 1, MPI_INT, comm,
-                                       comm->c_coll->coll_allgather_module);
-    if (OMPI_SUCCESS != ret) {
-        goto error;
-    }
-
+    module->addrs = calloc(comm_size, sizeof(uint64_t));
+    module->state_addrs = calloc(comm_size, sizeof(uint64_t));
     for (i = 0; i < comm_size; i++) {
-        ucp_ep_h ep = OSC_UCX_GET_EP(module->comm, i);
-        uint64_t dest_size;
-        assert(ep != NULL);
-
-        info_offset = disps[i];
-
-        memcpy(&(module->win_info_array[i]).addr, &recv_buf[info_offset], sizeof(uint64_t));
-        info_offset += sizeof(uint64_t);
-        memcpy(&(module->state_info_array[i]).addr, &recv_buf[info_offset], sizeof(uint64_t));
-        info_offset += sizeof(uint64_t);
-        memcpy(&dest_size, &recv_buf[info_offset], sizeof(uint64_t));
-        info_offset += sizeof(uint64_t);
-
-        (module->win_info_array[i]).rkey_init = false;
-        if (dest_size > 0 && (flavor == MPI_WIN_FLAVOR_ALLOCATE || flavor == MPI_WIN_FLAVOR_CREATE)) {
-            status = ucp_ep_rkey_unpack(ep, &recv_buf[info_offset],
-                                        &((module->win_info_array[i]).rkey));
-            if (status != UCS_OK) {
-                OSC_UCX_VERBOSE(1, "ucp_ep_rkey_unpack failed: %d", status);
-                ret = OMPI_ERROR;
-                goto error;
-            }
-            info_offset += rkey_sizes[i];
-            (module->win_info_array[i]).rkey_init = true;
-        }
-
-        status = ucp_ep_rkey_unpack(ep, &recv_buf[info_offset],
-                                    &((module->state_info_array[i]).rkey));
-        if (status != UCS_OK) {
-            OSC_UCX_VERBOSE(1, "ucp_ep_rkey_unpack failed: %d", status);
-            ret = OMPI_ERROR;
-            goto error;
-        }
-        (module->state_info_array[i]).rkey_init = true;
+        memcpy(&(module->addrs[i]), recv_buf, sizeof(uint64_t));
+        memcpy(&(module->state_addrs[i]), recv_buf + sizeof(uint64_t), sizeof(uint64_t));
     }
-
-    free(my_info);
     free(recv_buf);
 
-    if (rkey_buffer_size != 0) {
-        ucp_rkey_buffer_release(rkey_buffer);
-    }
-    ucp_rkey_buffer_release(state_rkey_buffer);
-
+    /* init window state */
     module->state.lock = TARGET_LOCK_UNLOCKED;
     module->state.post_index = 0;
     memset((void *)module->state.post_state, 0, sizeof(uint64_t) * OMPI_OSC_UCX_POST_PEER_MAX);
@@ -655,30 +412,9 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
     return ret;
 
  error:
-    if (my_addr) ucp_worker_release_address(mca_osc_ucx_component.ucp_worker, my_addr);
-    if (recv_buf) free(recv_buf);
-    if (my_info) free(my_info);
-    for (i = 0; i < comm_size; i++) {
-        if ((module->win_info_array[i]).rkey != NULL) {
-            ucp_rkey_destroy((module->win_info_array[i]).rkey);
-        }
-        if ((module->state_info_array[i]).rkey != NULL) {
-            ucp_rkey_destroy((module->state_info_array[i]).rkey);
-        }
-    }
-    if (rkey_buffer) ucp_rkey_buffer_release(rkey_buffer);
-    if (state_rkey_buffer) ucp_rkey_buffer_release(state_rkey_buffer);
-    if (module->win_info_array) free(module->win_info_array);
-    if (module->state_info_array) free(module->state_info_array);
     if (module->disp_units) free(module->disp_units);
     if (module->comm) ompi_comm_free(&module->comm);
     if (module->per_target_ops_nums) free(module->per_target_ops_nums);
-    if (eps_created) {
-        for (i = 0; i < comm_size; i++) {
-            ucp_ep_h ep = OSC_UCX_GET_EP(module->comm, i);
-            ucp_ep_destroy(ep);
-        }
-    }
     if (module) {
         free(module);
         ompi_osc_ucx_unregister_progress();
@@ -686,9 +422,8 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
 
 error_nomem:
     if (env_initialized == true) {
+        opal_common_ucx_wpool_finalize(mca_osc_ucx_component.wpool);
         OBJ_DESTRUCT(&mca_osc_ucx_component.requests);
-        ucp_worker_destroy(mca_osc_ucx_component.ucp_worker);
-        ucp_cleanup(mca_osc_ucx_component.ucp_context);
         mca_osc_ucx_component.env_initialized = false;
     }
     return ret;

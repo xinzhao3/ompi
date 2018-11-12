@@ -24,16 +24,9 @@
 #define OMPI_OSC_UCX_ATTACH_MAX    32
 #define OMPI_OSC_UCX_RKEY_BUF_MAX  1024
 
-typedef struct ompi_osc_ucx_win_info {
-    ucp_rkey_h rkey;
-    uint64_t addr;
-    bool rkey_init;
-} ompi_osc_ucx_win_info_t;
-
 typedef struct ompi_osc_ucx_component {
     ompi_osc_base_component_t super;
-    ucp_context_h ucp_context;
-    ucp_worker_h ucp_worker;
+    opal_common_ucx_wpool_t *wpool;
     bool enable_mpi_threads;
     opal_free_list_t requests; /* request free list for the r* communication variants */
     bool env_initialized; /* UCX environment is initialized or not */
@@ -97,12 +90,10 @@ typedef struct ompi_osc_ucx_state {
 typedef struct ompi_osc_ucx_module {
     ompi_osc_base_module_t super;
     struct ompi_communicator_t *comm;
-    ucp_mem_h memh; /* remote accessible memory */
     int flavor;
     size_t size;
-    ucp_mem_h state_memh;
-    ompi_osc_ucx_win_info_t *win_info_array;
-    ompi_osc_ucx_win_info_t *state_info_array;
+    uint64_t *addrs;
+    uint64_t *state_addrs;
     int disp_unit; /* if disp_unit >= 0, then everyone has the same
                     * disp unit size; if disp_unit == -1, then we
                     * need to look at disp_units */
@@ -122,6 +113,9 @@ typedef struct ompi_osc_ucx_module {
     uint64_t req_result;
     int *start_grp_ranks;
     bool lock_all_is_nocheck;
+    opal_common_ucx_ctx_t *ctx;
+    opal_common_ucx_mem_t *mem;
+    opal_common_ucx_mem_t *state_mem;
 } ompi_osc_ucx_module_t;
 
 typedef enum locktype {
