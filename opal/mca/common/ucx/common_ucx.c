@@ -369,11 +369,13 @@ static _worker_info_t* _wpool_remove_from_idle(opal_common_ucx_wpool_t *wpool)
 OPAL_DECLSPEC opal_common_ucx_wpool_t * opal_common_ucx_wpool_allocate(void)
 {
     opal_common_ucx_wpool_t *ptr = calloc(1, sizeof(opal_common_ucx_wpool_t *));
+    ptr->refcnt = 0;
     return ptr;
 }
 
 OPAL_DECLSPEC void opal_common_ucx_wpool_free(opal_common_ucx_wpool_t *wpool)
 {
+    assert(wpool->refcnt == 0);
     free(wpool);
 }
 
@@ -388,6 +390,12 @@ OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
     ucs_status_t status;
     int ret = OPAL_SUCCESS;
 
+    if (wpool->refcnt > 0) {
+        wpool->refcnt++;
+        return ret;
+    }
+
+    wpool->refcnt++;
     wpool->cur_ctxid = wpool->cur_memid = 0;
     OBJ_CONSTRUCT(&wpool->mutex, opal_mutex_t);
 
@@ -459,6 +467,11 @@ OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
 
 OPAL_DECLSPEC void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
 {
+    wpool->refcnt--;
+    if (wpool->refcnt > 0) {
+        return;
+    }
+
     /* Go over the list, free idle list items */
     opal_mutex_lock(&wpool->mutex);
     if (!opal_list_is_empty(&wpool->idle_workers)) {
