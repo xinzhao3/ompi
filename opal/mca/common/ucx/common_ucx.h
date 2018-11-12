@@ -114,15 +114,20 @@ typedef struct {
     opal_list_t workers; /* active worker lists */
     char *recv_worker_addrs;
     int *recv_worker_displs;
+    int comm_size;
 } opal_common_ucx_ctx_t;
 
 typedef struct {
     int mem_id;
     opal_mutex_t mutex;
     opal_common_ucx_ctx_t *ctx; /* which ctx this mem_reg belongs to */
+    ucp_mem_h memh;
+    void *rkey_addr;
+    size_t rkey_addr_len;
     opal_list_t mem_regions; /* mem region lists */
     char *mem_addrs;
     int *mem_displs;
+    int comm_size;
 } opal_common_ucx_mem_t;
 
 typedef enum {
@@ -134,6 +139,15 @@ typedef enum {
     OPAL_COMMON_UCX_SCOPE_EP,
     OPAL_COMMON_UCX_SCOPE_WORKER
 } opal_common_ucx_flush_scope_t;
+
+typedef enum {
+    OPAL_COMMON_UCX_MEM_ALLOCATE_MAP,
+    OPAL_COMMON_UCX_MEM_MAP
+} opal_common_ucx_mem_type_t;
+
+typedef int (*opal_common_ucx_exchange_func_t)(void *my_info, size_t my_info_len,
+                                               char **recv_info, int **disps,
+                                               void *metadata);
 
 OPAL_DECLSPEC void opal_common_ucx_mca_register(void);
 OPAL_DECLSPEC void opal_common_ucx_mca_deregister(void);
