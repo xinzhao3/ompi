@@ -286,3 +286,151 @@ OPAL_DECLSPEC int opal_common_ucx_del_procs(opal_common_ucx_del_proc_t *procs, s
     return OPAL_SUCCESS;
 }
 
+/***********************************************************************/
+
+static inline void _cleanup_tlocal(void *arg)
+{
+    // 1. Cleanup all rkeys in the window table
+    // 2. Return all workers into the idle pool
+}
+
+static ucp_worker_h _create_ctx_worker(opal_common_ucx_wpool_t *wpool)
+{
+    ucp_worker_params_t worker_params;
+    ucp_worker_h worker;
+    ucs_status_t status;
+
+    memset(&worker_params, 0, sizeof(worker_params));
+    worker_params.field_mask = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
+    worker_params.thread_mode = UCS_THREAD_MODE_SINGLE;
+    status = ucp_worker_create(wpool->ucp_ctx, &worker_params, &worker);
+    if (UCS_OK != status) {
+        return NULL;
+    }
+
+    return worker;
+}
+
+static void _wpool_add_to_idle(opal_common_ucx_wpool_t *wpool,
+                               _worker_engine_t *wkr)
+{
+    _idle_list_item_t *item;
+
+    if(wkr->comm_size != 0) {
+        int i;
+        for (i = 0; i < wkr->comm_size; i++) {
+            ucp_ep_destroy(wkr->endpoints[i]);
+        }
+        free(wkr->endpoints);
+        wkr->endpoints = NULL;
+        wkr->comm_size = 0;
+    }
+
+    item = OBJ_NEW(_idle_list_item_t);
+    item->ptr = wkr;
+
+    opal_mutex_lock(&wpool->mutex);
+    opal_list_append(&wpool->idle_workers, &item->super);
+    opal_mutex_unlock(&wpool->mutex);
+}
+
+static _worker_engine_t* _wpool_remove_from_idle(opal_common_ucx_wpool_t *wpool)
+{
+    _worker_engine_t *wkr = NULL;
+    _idle_list_item_t *item = NULL;
+
+    opal_mutex_lock(&wpool->mutex);
+    if (!opal_list_is_empty(&wpool->idle_workers)) {
+        item = (_idle_list_item_t *)opal_list_get_first(&wpool->idle_workers);
+        opal_list_remove_item(&wpool->idle_workers, &item->super);
+    }
+    opal_mutex_unlock(&wpool->mutex);
+
+    if (item != NULL) {
+        wkr = item->ptr;
+        OBJ_RELEASE(item);
+    }
+
+    return wkr;
+}
+
+
+OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
+                                             int proc_world_size,
+                                             ucp_request_init_callback_t req_init_ptr,
+                                             size_t req_size)
+{
+    ucp_config_t *config = NULL;
+    ucp_params_t context_params;
+    _worker_engine_t *wkr;
+    ucs_status_t status;
+    int ret = OPAL_SUCCESS;
+
+    wpool->cur_ctxid = wpool->cur_memid = 0;
+    OBJ_CONSTRUCT(&wpool->mutex, opal_mutex_t);
+
+    status = ucp_config_read("MPI", NULL, &config);
+    if (UCS_OK != status) {
+        MCA_COMMON_UCX_VERBOSE(1, "ucp_config_read failed: %d", status);
+        return OPAL_ERROR;
+    }
+
+    /* initialize UCP context */
+    memset(&context_params, 0, sizeof(context_params));
+    context_params.field_mask = UCP_PARAM_FIELD_FEATURES |
+                                UCP_PARAM_FIELD_MT_WORKERS_SHARED |
+                                UCP_PARAM_FIELD_ESTIMATED_NUM_EPS |
+                                UCP_PARAM_FIELD_REQUEST_INIT |
+                                UCP_PARAM_FIELD_REQUEST_SIZE;
+    context_params.features = UCP_FEATURE_RMA | UCP_FEATURE_AMO32 | UCP_FEATURE_AMO64;
+    context_params.mt_workers_shared = 1;
+    context_params.estimated_num_eps = proc_world_size;
+    context_params.request_init = req_init_ptr;
+    context_params.request_size = req_size;
+
+    status = ucp_init(&context_params, config, &wpool->ucp_ctx);
+    ucp_config_release(config);
+    if (UCS_OK != status) {
+        MCA_COMMON_UCX_VERBOSE(1, "ucp_init failed: %d", status);
+        ret = OPAL_ERROR;
+        goto err_ucp_init;
+    }
+
+    /* create recv worker and add to idle pool */
+    OBJ_CONSTRUCT(&wpool->idle_workers, opal_list_t);
+    wpool->recv_worker = _create_ctx_worker(wpool);
+    if (wpool->recv_worker == NULL) {
+        MCA_COMMON_UCX_VERBOSE(1, "_create_ctx_worker failed");
+        ret = OPAL_ERROR;
+        goto err_worker_create;
+    }
+
+    wkr = OBJ_NEW(_worker_engine_t);
+    OBJ_CONSTRUCT(&wkr->mutex, opal_mutex_t);
+    wkr->worker = wpool->recv_worker;
+    wkr->endpoints = NULL;
+    wkr->comm_size = 0;
+
+    _wpool_add_to_idle(wpool, wkr);
+
+    status = ucp_worker_get_address(wpool->recv_worker,
+                                    &wpool->recv_waddr, &wpool->recv_waddr_len);
+    if (status != UCS_OK) {
+        MCA_COMMON_UCX_VERBOSE(1, "ucp_worker_get_address failed: %d", status);
+        ret = OPAL_ERROR;
+        goto err_get_addr;
+    }
+
+    pthread_key_create(&_tlocal_key, _cleanup_tlocal);
+
+    return ret;
+
+ err_get_addr:
+    if (NULL != wpool->recv_worker) {
+        ucp_worker_destroy(wpool->recv_worker);
+    }
+ err_worker_create:
+    ucp_cleanup(wpool->ucp_ctx);
+ err_ucp_init:
+    return ret;
+}
