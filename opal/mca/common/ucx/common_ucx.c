@@ -386,7 +386,7 @@ static _worker_info_t* _wpool_remove_from_idle(opal_common_ucx_wpool_t *wpool)
 
 OPAL_DECLSPEC opal_common_ucx_wpool_t * opal_common_ucx_wpool_allocate(void)
 {
-    opal_common_ucx_wpool_t *ptr = calloc(1, sizeof(opal_common_ucx_wpool_t *));
+    opal_common_ucx_wpool_t *ptr = calloc(1, sizeof(opal_common_ucx_wpool_t));
     ptr->refcnt = 0;
     return ptr;
 }
