@@ -347,7 +347,7 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
     memcpy((char*)my_info + sizeof(uint64_t), &state_base, sizeof(uint64_t));
 
     recv_buf = (char *)calloc(comm_size, 2 * sizeof(uint64_t));
-    ret = comm->c_coll->coll_allgather((void *)&my_info, 2 * sizeof(uint64_t),
+    ret = comm->c_coll->coll_allgather((void *)my_info, 2 * sizeof(uint64_t),
                                        MPI_BYTE, recv_buf, 2 * sizeof(uint64_t),
                                        MPI_BYTE, comm, comm->c_coll->coll_allgather_module);
     if (ret != OMPI_SUCCESS) {
@@ -357,8 +357,8 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
     module->addrs = calloc(comm_size, sizeof(uint64_t));
     module->state_addrs = calloc(comm_size, sizeof(uint64_t));
     for (i = 0; i < comm_size; i++) {
-        memcpy(&(module->addrs[i]), recv_buf, sizeof(uint64_t));
-        memcpy(&(module->state_addrs[i]), recv_buf + sizeof(uint64_t), sizeof(uint64_t));
+        memcpy(&(module->addrs[i]), recv_buf + i * 2 * sizeof(uint64_t), sizeof(uint64_t));
+        memcpy(&(module->state_addrs[i]), recv_buf + i * 2 * sizeof(uint64_t) + sizeof(uint64_t), sizeof(uint64_t));
     }
     free(recv_buf);
 
@@ -601,5 +601,6 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
 
     return ret;
     */
+    opal_common_ucx_wpool_finalize(mca_osc_ucx_component.wpool);
     return OMPI_SUCCESS;
 }

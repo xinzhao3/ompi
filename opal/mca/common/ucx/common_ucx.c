@@ -814,10 +814,9 @@ _tlocal_tls_get_worker(_tlocal_table_t *tls, _worker_info_t **_winfo)
             return OPAL_ERR_OUT_OF_RESOURCE;
         }
         OBJ_CONSTRUCT(&winfo->mutex, opal_mutex_t);
-        _create_ctx_worker(tls->wpool);
+        winfo->worker = _create_ctx_worker(tls->wpool);
         winfo->endpoints = NULL;
         winfo->comm_size = 0;
-        opal_mutex_unlock(&tls->wpool->mutex);
     }
     *_winfo = winfo;
 
@@ -844,7 +843,7 @@ static int
 _tlocal_tls_memtbl_extend(_tlocal_table_t *tbl, size_t append)
 {
     size_t i;
-    size_t newsize = (tbl->ctx_tbl_size + append);
+    size_t newsize = (tbl->mem_tbl_size + append);
 
     tbl->mem_tbl = realloc(tbl->mem_tbl, newsize * sizeof(*tbl->mem_tbl));
     for (i = tbl->mem_tbl_size; i < tbl->mem_tbl_size + append; i++) {
@@ -1325,6 +1324,14 @@ opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
 {
     _worker_list_item_t *item;
     opal_common_ucx_ctx_t *ctx = mem->ctx;
+
+    /*
+    volatile int delay = 1;
+    while( delay ){
+        sleep(1);
+    }
+    */
+
     opal_mutex_lock(&ctx->mutex);
     OPAL_LIST_FOREACH(item, &ctx->workers, _worker_list_item_t) {
         switch (scope) {

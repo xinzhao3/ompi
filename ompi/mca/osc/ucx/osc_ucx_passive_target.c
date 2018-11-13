@@ -24,6 +24,15 @@ static inline int start_shared(ompi_osc_ucx_module_t *module, int target) {
 //    ucs_status_t status;
 //    int ret;
 
+/*
+    volatile int delay = 1;
+    while( delay ){
+        sleep(1);
+    }
+*/   
+
+    return OMPI_SUCCESS;
+
     while (true) {
         opal_common_ucx_mem_fetch(module->state_mem, UCP_ATOMIC_FETCH_OP_FADD, 1,
                                   target,
