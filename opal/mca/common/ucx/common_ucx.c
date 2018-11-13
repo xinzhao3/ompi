@@ -24,7 +24,7 @@ typedef struct  {
     opal_mutex_t mutex;
     ucp_worker_h worker;
     ucp_ep_h *endpoints;
-    int comm_size;
+    size_t comm_size;
 } _worker_info_t;
 
 OBJ_CLASS_DECLARATION(_worker_info_t);
@@ -72,7 +72,7 @@ OBJ_CLASS_INSTANCE(_worker_list_item_t, opal_list_item_t, NULL, NULL);
 
 typedef struct {
     opal_list_item_t super;
-    _mem_info_t *ptr;
+    _tlocal_mem_t *ptr;
 } _mem_region_list_item_t;
 
 OBJ_CLASS_DECLARATION(_mem_region_list_item_t);
@@ -92,6 +92,33 @@ OBJ_CLASS_DECLARATION(_tlocal_table_t);
 OBJ_CLASS_INSTANCE(_tlocal_table_t, opal_list_item_t, NULL, NULL);
 
 static pthread_key_t _tlocal_key = {0};
+
+OPAL_DECLSPEC int
+opal_common_ucx_mem_op(opal_common_ucx_mem_t *mem,
+                       opal_common_ucx_op_t op,
+                       int target,
+                       void *buffer, size_t len,
+                       uint64_t rem_addr);
+OPAL_DECLSPEC void opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
+                                             opal_common_ucx_flush_scope_t scope,
+                                             int target);
+
+static int _tlocal_tls_ctxtbl_extend(_tlocal_table_t *tbl, size_t append);
+static int _tlocal_tls_memtbl_extend(_tlocal_table_t *tbl, size_t append);
+static _tlocal_table_t* _common_ucx_tls_init(opal_common_ucx_wpool_t *wpool);
+static inline _tlocal_ctx_t *_tlocal_ctx_search(_tlocal_table_t *tls,
+                                                 int ctx_id);
+static int _tlocal_cleanup_ctx_record(_tlocal_ctx_t *ctx_rec);
+static _tlocal_ctx_t *_tlocal_add_ctx(_tlocal_table_t *tls,
+                                       opal_common_ucx_ctx_t *ctx);
+static int _tlocal_ctx_connect(_tlocal_ctx_t *ctx, int target);
+static int _tlocal_ctx_release(opal_common_ucx_ctx_t *ctx);
+static inline _tlocal_mem_t *_tlocal_search_mem(_tlocal_table_t *tls,
+                                                int mem_id);
+static _tlocal_mem_t *_tlocal_add_mem(_tlocal_table_t *tls,
+                                       opal_common_ucx_mem_t *mem);
+static int _tlocal_mem_create_rkey(_tlocal_mem_t *mem_rec, ucp_ep_h ep,
+                                   int target);
 
 /***********************************************************************/
 
@@ -320,25 +347,25 @@ static ucp_worker_h _create_ctx_worker(opal_common_ucx_wpool_t *wpool)
 }
 
 static int _wpool_add_to_idle(opal_common_ucx_wpool_t *wpool,
-                               _worker_info_t *wkr)
+                              _worker_info_t *winfo)
 {
     _idle_list_item_t *item;
 
-    if(wkr->comm_size != 0) {
-        int i;
-        for (i = 0; i < wkr->comm_size; i++) {
-            ucp_ep_destroy(wkr->endpoints[i]);
+    if(winfo->comm_size != 0) {
+        size_t i;
+        for (i = 0; i < winfo->comm_size; i++) {
+            ucp_ep_destroy(winfo->endpoints[i]);
         }
-        free(wkr->endpoints);
-        wkr->endpoints = NULL;
-        wkr->comm_size = 0;
+        free(winfo->endpoints);
+        winfo->endpoints = NULL;
+        winfo->comm_size = 0;
     }
 
     item = OBJ_NEW(_idle_list_item_t);
     if (NULL == item) {
         return OPAL_ERR_OUT_OF_RESOURCE;
     }
-    item->ptr = wkr;
+    item->ptr = winfo;
 
     opal_mutex_lock(&wpool->mutex);
     opal_list_append(&wpool->idle_workers, &item->super);
@@ -388,11 +415,11 @@ OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
     ucp_params_t context_params;
     _worker_info_t *wkr;
     ucs_status_t status;
-    int ret = OPAL_SUCCESS;
+    int rc = OPAL_SUCCESS;
 
     if (wpool->refcnt > 0) {
         wpool->refcnt++;
-        return ret;
+        return rc;
     }
 
     wpool->refcnt++;
@@ -422,7 +449,7 @@ OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
     ucp_config_release(config);
     if (UCS_OK != status) {
         MCA_COMMON_UCX_VERBOSE(1, "ucp_init failed: %d", status);
-        ret = OPAL_ERROR;
+        rc = OPAL_ERROR;
         goto err_ucp_init;
     }
 
@@ -431,7 +458,7 @@ OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
     wpool->recv_worker = _create_ctx_worker(wpool);
     if (wpool->recv_worker == NULL) {
         MCA_COMMON_UCX_VERBOSE(1, "_create_ctx_worker failed");
-        ret = OPAL_ERROR;
+        rc = OPAL_ERROR;
         goto err_worker_create;
     }
 
@@ -441,28 +468,33 @@ OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
     wkr->endpoints = NULL;
     wkr->comm_size = 0;
 
-    _wpool_add_to_idle(wpool, wkr);
-
     status = ucp_worker_get_address(wpool->recv_worker,
                                     &wpool->recv_waddr, &wpool->recv_waddr_len);
     if (status != UCS_OK) {
         MCA_COMMON_UCX_VERBOSE(1, "ucp_worker_get_address failed: %d", status);
-        ret = OPAL_ERROR;
+        rc = OPAL_ERROR;
         goto err_get_addr;
+    }
+
+    rc = _wpool_add_to_idle(wpool, wkr);
+    if (rc) {
+        goto err_wpool_add;
     }
 
     pthread_key_create(&_tlocal_key, _cleanup_tlocal);
 
-    return ret;
+    return rc;
 
- err_get_addr:
+err_wpool_add:
+    free(wpool->recv_waddr);
+err_get_addr:
     if (NULL != wpool->recv_worker) {
         ucp_worker_destroy(wpool->recv_worker);
     }
  err_worker_create:
     ucp_cleanup(wpool->ucp_ctx);
  err_ucp_init:
-    return ret;
+    return rc;
 }
 
 OPAL_DECLSPEC void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
@@ -531,7 +563,7 @@ OPAL_DECLSPEC int opal_common_ucx_ctx_create(opal_common_ucx_wpool_t *wpool, int
     return ret;
 }
 
-static int _common_ucx_ctx_free(opal_common_ucx_ctx_t *ctx)
+static void _common_ucx_ctx_free(opal_common_ucx_ctx_t *ctx)
 {
     free(ctx->recv_worker_addrs);
     free(ctx->recv_worker_displs);
@@ -540,17 +572,33 @@ static int _common_ucx_ctx_free(opal_common_ucx_ctx_t *ctx)
     free(ctx);
 }
 
-OPAL_DECLSPEC int opal_common_ucx_ctx_release(opal_common_ucx_ctx_t *ctx)
+OPAL_DECLSPEC void
+opal_common_ucx_ctx_release(opal_common_ucx_ctx_t *ctx)
 {
     // TODO: implement
     _tlocal_ctx_release(ctx);
 }
 
+static int
+_common_ucx_ctx_append(opal_common_ucx_ctx_t *ctx,
+                                  _tlocal_ctx_t *ctx_rec)
+{
+    _worker_list_item_t *item = OBJ_NEW(_worker_list_item_t);
+    if (NULL == item) {
+        return OPAL_ERR_OUT_OF_RESOURCE;
+    }
+    item->ptr = ctx_rec;
+    opal_mutex_lock(&ctx->mutex);
+    opal_list_append(&ctx->workers, &item->super);
+    opal_mutex_unlock(&ctx->mutex);
+    return OPAL_SUCCESS;
+}
+
 static void
-_common_ucx_ctx_remove(opal_common_ucx_ctx_t *ctx, _worker_info_t *ctx_rec)
+_common_ucx_ctx_remove(opal_common_ucx_ctx_t *ctx, _tlocal_ctx_t *ctx_rec)
 {
     int can_free = 0;
-    _worker_list_item_t *item = NULL, next;
+    _worker_list_item_t *item = NULL, *next;
 
     opal_mutex_lock(&ctx->mutex);
     OPAL_LIST_FOREACH_SAFE(item, next, &ctx->workers, _worker_list_item_t) {
@@ -560,15 +608,14 @@ _common_ucx_ctx_remove(opal_common_ucx_ctx_t *ctx, _worker_info_t *ctx_rec)
             break;
         }
     }
-    if (0 == opal_list_get_size()) {
+    if (0 == opal_list_get_size(&ctx->workers)) {
         can_free = 1;
     }
     opal_mutex_unlock(&ctx->mutex);
 
     if (can_free) {
         /* All references to this data structure are removed
-         * we can safely release communication context structure
-         */
+         * we can safely release communication context structure */
         _common_ucx_ctx_free(ctx);
     }
 }
@@ -638,9 +685,8 @@ OPAL_DECLSPEC int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int com
 
     mem->mem_id = OPAL_ATOMIC_ADD_FETCH32(&mem->mem_id, 1);
     OBJ_CONSTRUCT(&mem->mutex, opal_mutex_t);
-    OBJ_CONSTRUCT(&mem->mem_regions, opal_list_t);
+    OBJ_CONSTRUCT(&mem->registrations, opal_list_t);
     mem->ctx = ctx;
-    mem->comm_size = comm_size;
     mem->mem_addrs = NULL;
     mem->mem_displs = NULL;
 
@@ -672,14 +718,121 @@ OPAL_DECLSPEC int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int com
     ucp_mem_unmap(ctx->wpool->ucp_ctx, mem->memh);
  error_mem_map:
     OBJ_DESTRUCT(&mem->mutex);
-    OBJ_DESTRUCT(&mem->mem_regions);
+    OBJ_DESTRUCT(&mem->registrations);
     free(mem);
     (*mem_ptr) = NULL;
     return ret;
 }
 
+static void _common_ucx_mem_free(opal_common_ucx_mem_t *mem)
+{
+    free(mem->mem_addrs);
+    free(mem->mem_displs);
+    ucp_mem_unmap(mem->ctx->wpool->ucp_ctx, mem->memh);
+    OBJ_DESTRUCT(&mem->mutex);
+    OBJ_DESTRUCT(&mem->registrations);
+    free(mem);
+}
+
 static int
-_tlocal_extend_ctxtbl(_tlocal_table_t *tbl, size_t append)
+_common_ucx_mem_append(opal_common_ucx_mem_t *mem,
+                       _tlocal_mem_t *mem_rec)
+{
+    _mem_region_list_item_t *item = OBJ_NEW(_mem_region_list_item_t);
+    if (NULL == item) {
+        return OPAL_ERR_OUT_OF_RESOURCE;
+    }
+    item->ptr = mem_rec;
+    opal_mutex_lock(&mem->mutex);
+    opal_list_append(&mem->registrations, &item->super);
+    opal_mutex_unlock(&mem->mutex);
+    return OPAL_SUCCESS;
+}
+
+static void
+_common_ucx_mem_remove(opal_common_ucx_mem_t *mem, _tlocal_mem_t *mem_rec)
+{
+    int can_free = 0;
+    _mem_region_list_item_t *item = NULL, *next;
+
+    opal_mutex_lock(&mem->mutex);
+    OPAL_LIST_FOREACH_SAFE(item, next, &mem->registrations, _mem_region_list_item_t) {
+        if (mem_rec == item->ptr) {
+            opal_list_remove_item(&mem->registrations, &item->super);
+            OBJ_RELEASE(item);
+            break;
+        }
+    }
+    if (0 == opal_list_get_size(&mem->registrations)) {
+        can_free = 1;
+    }
+    opal_mutex_unlock(&mem->mutex);
+
+    if (can_free) {
+        /* All references to this data structure are removed
+         * we can safely release communication context structure */
+        _common_ucx_mem_free(mem);
+    }
+}
+
+
+// TODO: don't want to inline this function
+static _tlocal_table_t* _common_ucx_tls_init(opal_common_ucx_wpool_t *wpool)
+{
+    _tlocal_table_t *tls = NULL;
+    tls = OBJ_NEW(_tlocal_table_t);
+    memset(tls, 0, sizeof(*tls));
+
+    /* Add this TLS to the global wpool structure for future
+     * cleanup purposes */
+    tls->wpool = wpool;
+    opal_mutex_lock(&wpool->mutex);
+    opal_list_append(&wpool->tls_list, &tls->super);
+    opal_mutex_unlock(&wpool->mutex);
+
+    if( _tlocal_tls_ctxtbl_extend(tls, 4) ){
+        // TODO: handle error
+    }
+    if(_tlocal_tls_memtbl_extend(tls, 4)) {
+        // TODO: handle error
+    }
+    pthread_setspecific(_tlocal_key, tls);
+    return tls;
+}
+
+static inline _tlocal_table_t *
+_tlocal_get_tls(opal_common_ucx_wpool_t *wpool){
+    _tlocal_table_t *tls = pthread_getspecific(_tlocal_key);
+    if( OPAL_UNLIKELY(NULL == tls) ) {
+        tls = _common_ucx_tls_init(wpool);
+    }
+    return tls;
+}
+
+static int
+_tlocal_tls_get_worker(_tlocal_table_t *tls, _worker_info_t **_winfo)
+{
+    _worker_info_t *winfo;
+    *_winfo = NULL;
+    winfo = _wpool_remove_from_idle(tls->wpool);
+    if (!winfo) {
+        winfo = calloc(1, sizeof(*winfo));
+        if (!winfo) {
+            return OPAL_ERR_OUT_OF_RESOURCE;
+        }
+        OBJ_CONSTRUCT(&winfo->mutex, opal_mutex_t);
+        _create_ctx_worker(tls->wpool);
+        winfo->endpoints = NULL;
+        winfo->comm_size = 0;
+        opal_mutex_unlock(&tls->wpool->mutex);
+    }
+    *_winfo = winfo;
+
+    return OPAL_SUCCESS;
+}
+
+static int
+_tlocal_tls_ctxtbl_extend(_tlocal_table_t *tbl, size_t append)
 {
     size_t i;
     size_t newsize = (tbl->ctx_tbl_size + append);
@@ -695,7 +848,7 @@ _tlocal_extend_ctxtbl(_tlocal_table_t *tbl, size_t append)
     return OPAL_SUCCESS;
 }
 static int
-_tlocal_extend_memtbl(_tlocal_table_t *tbl, size_t append)
+_tlocal_tls_memtbl_extend(_tlocal_table_t *tbl, size_t append)
 {
     size_t i;
     size_t newsize = (tbl->ctx_tbl_size + append);
@@ -711,42 +864,21 @@ _tlocal_extend_memtbl(_tlocal_table_t *tbl, size_t append)
     return OPAL_SUCCESS;
 }
 
-// TODO: don't want to inline this function
-static _tlocal_table_t* _common_ucx_init_tls(opal_common_ucx_wpool_t *wpool)
-{
-    _tlocal_table_t *tls = NULL;
-    tls = OBJ_NEW(_tlocal_table_t);
-    memset(tls, 0, sizeof(*tls));
 
-    /* Add this TLS to the global wpool structure for future
-     * cleanup purposes */
-    tls->wpool = wpool;
-    opal_mutex_lock(&wpool->mutex);
-    opal_list_append(&wpool->tls_list, &tls->super);
-    opal_mutex_unlock(&wpool->mutex);
-
-    if( _tlocal_extend_ctxtbl(tls, 4) ){
-        // TODO: handle error
-    }
-    if(_tlocal_extend_memtbl(tls, 4)) {
-        // TODO: handle error
-    }
-    pthread_setspecific(_tlocal_key, tls);
-    return tls;
-}
-
-static inline _worker_info_t *_tlocal_search_ctx(_tlocal_table_t *tls, int ctx_id)
+static inline _tlocal_ctx_t *
+_tlocal_ctx_search(_tlocal_table_t *tls, int ctx_id)
 {
     size_t i;
     for(i=0; i<tls->ctx_tbl_size; i++) {
         if( tls->ctx_tbl[i]->ctx_id == ctx_id){
-            return tls->ctx_tbl[i]->winfo;
+            return tls->ctx_tbl[i];
         }
     }
     return NULL;
 }
 
-static int _tlocal_cleanup_ctx_record(_tlocal_ctx_t *ctx_rec)
+static int
+_tlocal_cleanup_ctx_record(_tlocal_ctx_t *ctx_rec)
 {
     int rc;
     if (!ctx_rec->is_freed) {
@@ -755,10 +887,7 @@ static int _tlocal_cleanup_ctx_record(_tlocal_ctx_t *ctx_rec)
     /* Remove myself from the communication context structure
      * This may result in context release as we are using
      * delayed cleanup */
-    rc = _common_ucx_ctx_remove(ctx_rec->gctx, ctx_rec);
-    if (rc) {
-        return rc;
-    }
+    _common_ucx_ctx_remove(ctx_rec->gctx, ctx_rec);
 
     /* Return the worker back to the
      * This may result in context release as we are using
@@ -768,19 +897,24 @@ static int _tlocal_cleanup_ctx_record(_tlocal_ctx_t *ctx_rec)
         return rc;
     }
     memset(ctx_rec, 0, sizeof(*ctx_rec));
+    return OPAL_SUCCESS;
 }
 
 // TODO: Don't want to inline this (slow path)
-static _worker_info_t *_tlocal_add_ctx(_tlocal_table_t *tls,
-                                       opal_common_ucx_ctx_t *ctx)
+static _tlocal_ctx_t *
+_tlocal_add_ctx(_tlocal_table_t *tls, opal_common_ucx_ctx_t *ctx)
 {
     size_t i;
     int rc;
 
     /* Try to find tavailable spot in the table */
     for (i=0; i<tls->ctx_tbl_size; i++) {
-        if (tls->ctx_tbl[i]->is_freed) {
-            /* Cleanup the record */
+        if (0 == tls->ctx_tbl[i]->ctx_id) {
+            /* Found clean record */
+            break;
+        }
+        if (tls->ctx_tbl[i]->is_freed ) {
+            /* Found dirty record, need to clean first */
             _tlocal_cleanup_ctx_record(tls->ctx_tbl[i]);
             break;
         }
@@ -788,14 +922,22 @@ static _worker_info_t *_tlocal_add_ctx(_tlocal_table_t *tls,
 
     if( tls->ctx_tbl_size >= i ){
         i = tls->ctx_tbl_size;
-        if( rc = _tlocal_extend_ctxtbl(tls, 4) ){
+        rc = _tlocal_tls_ctxtbl_extend(tls, 4);
+        if (rc) {
             //TODO: error out
             return NULL;
         }
     }
     tls->ctx_tbl[i]->ctx_id = ctx->ctx_id;
     tls->ctx_tbl[i]->gctx = ctx;
-    tls->ctx_tbl[i]->winfo = _get_new_worker(tls, ctx);
+    rc = _tlocal_tls_get_worker(tls, &tls->ctx_tbl[i]->winfo);
+    if (rc) {
+        //TODO: error out
+        return NULL;
+    }
+    tls->ctx_tbl[i]->winfo->endpoints = calloc(ctx->comm_size, sizeof(ucp_ep_h));
+    tls->ctx_tbl[i]->winfo->comm_size = ctx->comm_size;
+
 
     /* Make sure that we completed all the data structures before
              * placing the item to the list
@@ -804,63 +946,127 @@ static _worker_info_t *_tlocal_add_ctx(_tlocal_table_t *tls,
              */
     opal_atomic_wmb();
 
-    _ctx_append_worker(ctx, tls->ctx_tbl[i]);
+    /* add this worker into the context list */
+    rc = _common_ucx_ctx_append(ctx, tls->ctx_tbl[i]);
+    if (rc) {
+        //TODO: error out
+        return NULL;
+    }
 
+    /* All good - return the record */
     return tls->ctx_tbl[i];
 }
 
-static int _tlocal_ctx_connect(_tlocal_ctx_t *ctx, int target)
+static int _tlocal_ctx_connect(_tlocal_ctx_t *ctx_rec, int target)
 {
     ucp_ep_params_t ep_params;
-    _worker_info_t *winfo = ctx->winfo;
-    opal_common_ucx_ctx_t *gctx = ctx->gctx;
+    _worker_info_t *winfo = ctx_rec->winfo;
+    opal_common_ucx_ctx_t *gctx = ctx_rec->gctx;
+    ucs_status_t status;
     int displ;
 
     memset(&ep_params, 0, sizeof(ucp_ep_params_t));
     ep_params.field_mask = UCP_EP_PARAM_FIELD_REMOTE_ADDRESS;
 
-    opal_mutex_lock(&winfo->ctx->mutex);
+    opal_mutex_lock(&winfo->mutex);
     displ = gctx->recv_worker_displs[target];
-    ep_params.address = (ucp_address_t *)&(gctx->recv_worker_addrs[disp]);
+    ep_params.address = (ucp_address_t *)&(gctx->recv_worker_addrs[displ]);
     status = ucp_ep_create(winfo->worker, &ep_params, &winfo->endpoints[target]);
+    opal_mutex_lock(&winfo->mutex);
+
     if (status != UCS_OK) {
 //        TODO: error out here
 //        OSC_UCX_VERBOSE(1, "ucp_ep_create failed: %d", status);
-        ret = OPAL_ERROR;
+        return OPAL_ERROR;
     }
     return OPAL_SUCCESS;
 }
 
-static inline _worker_info_t *
+static int _tlocal_ctx_release(opal_common_ucx_ctx_t *ctx)
+{
+    _tlocal_table_t * tls = _tlocal_get_tls(ctx->wpool);
+    _tlocal_ctx_t *ctx_rec = _tlocal_ctx_search(tls, ctx->ctx_id);
+    int rc = OPAL_SUCCESS;
+
+    if (NULL == ctx_rec) {
+        /* we haven't participated in this context */
+        return OPAL_SUCCESS;
+    }
+
+    /* May free the ctx structure. Do not use it */
+    _common_ucx_ctx_remove(ctx, ctx_rec);
+    rc = _wpool_add_to_idle(tls->wpool, ctx_rec->winfo);
+
+    ctx_rec->ctx_id = 0;
+    ctx_rec->is_freed = 0;
+    ctx_rec->gctx = NULL;
+    ctx_rec->winfo = NULL;
+
+    return rc;
+}
+
+static inline _tlocal_mem_t *
 _tlocal_search_mem(_tlocal_table_t *tls, int mem_id)
 {
-    int i;
+    size_t i;
     for(i=0; i<tls->mem_tbl_size; i++) {
-        if( tls->mem_tbl[i] == mem_id){
-            return tls->mem_tbl[i]->mem;
+        if( tls->mem_tbl[i]->mem_id == mem_id){
+            return tls->mem_tbl[i];
         }
     }
     return NULL;
 }
 
-// TODO: Don't want to inline this (slow path)
-static _worker_info_t *_tlocal_add_mem(_tlocal_table_t *tls,
-                                       opal_common_ucx_ctx_t *mem)
+
+static void
+_tlocal_mem_record_cleanup(_tlocal_mem_t *mem_rec)
 {
-    int i, rc;
+    size_t i;
+    if (!mem_rec->is_freed) {
+        return;
+    }
+    /* Remove myself from the memory context structure
+     * This may result in context release as we are using
+     * delayed cleanup */
+    _common_ucx_mem_remove(mem_rec->gmem, mem_rec);
+
+    for(i = 0; i < mem_rec->gmem->ctx->comm_size; i++) {
+        if (mem_rec->mem->rkeys[i]) {
+            ucp_rkey_destroy(mem_rec->mem->rkeys[i]);
+        }
+    }
+
+    free(mem_rec->mem->rkeys);
+    free(mem_rec->mem);
+
+    memset(mem_rec, 0, sizeof(*mem_rec));
+}
+
+
+// TODO: Don't want to inline this (slow path)
+static _tlocal_mem_t *_tlocal_add_mem(_tlocal_table_t *tls,
+                                       opal_common_ucx_mem_t *mem)
+{
+    size_t i;
+    _tlocal_ctx_t *ctx_rec = NULL;
+    int rc;
 
     /* Try to find tavailable spot in the table */
     for (i=0; i<tls->mem_tbl_size; i++) {
+        if (0 == tls->mem_tbl[i]->mem_id) {
+            /* Found a clear record */
+        }
         if (tls->mem_tbl[i]->is_freed) {
-            /* Cleanup the record */
-            _tlocal_cleanup_mem_record(tls->mem_tbl[i]);
+            /* Found a dirty record. Need to clean it first */
+            _tlocal_mem_record_cleanup(tls->mem_tbl[i]);
             break;
         }
     }
 
     if( tls->mem_tbl_size >= i ){
         i = tls->mem_tbl_size;
-        if( rc = _tlocal_extend_memtbl(tls, 4) ){
+        rc = _tlocal_tls_memtbl_extend(tls, 4);
+        if (rc) {
             //TODO: error out
             return NULL;
         }
@@ -868,7 +1074,16 @@ static _worker_info_t *_tlocal_add_mem(_tlocal_table_t *tls,
     tls->mem_tbl[i]->mem_id = mem->mem_id;
     tls->mem_tbl[i]->gmem = mem;
     tls->mem_tbl[i]->is_freed = 0;
-    tls->mem_tbl[i]->mem = _get_new_memory(tls, mem);
+    tls->mem_tbl[i]->mem = calloc(1, sizeof(*tls->mem_tbl[i]->mem));
+    ctx_rec = _tlocal_ctx_search(tls, mem->ctx->ctx_id);
+    if (NULL == ctx_rec) {
+        // TODO: act accordingly - cleanup
+        return NULL;
+    }
+    tls->mem_tbl[i]->mem->worker = ctx_rec->winfo;
+    tls->mem_tbl[i]->mem->rkeys = calloc(mem->ctx->comm_size,
+                                         sizeof(*tls->mem_tbl[i]->mem->rkeys));
+
 
     /* Make sure that we completed all the data structures before
      * placing the item to the list
@@ -877,7 +1092,11 @@ static _worker_info_t *_tlocal_add_mem(_tlocal_table_t *tls,
      */
     opal_atomic_wmb();
 
-    _mem_append_rkey(mem, tls->mem_tbl[i]);
+    rc = _common_ucx_mem_append(mem, tls->mem_tbl[i]);
+    if (rc) {
+        // TODO: error handling
+        return NULL;
+    }
 
     return tls->mem_tbl[i];
 }
@@ -887,16 +1106,19 @@ static int _tlocal_mem_create_rkey(_tlocal_mem_t *mem_rec, ucp_ep_h ep, int targ
     _mem_info_t *minfo = mem_rec->mem;
     opal_common_ucx_mem_t *gmem = mem_rec->gmem;
     int displ = gmem->mem_displs[target];
+    ucs_status_t status;
 
     status = ucp_ep_rkey_unpack(ep, &gmem->mem_addrs[displ],
                                 &minfo->rkeys[target]);
     if (status != UCS_OK) {
         //        TODO: error out here
         //        OSC_UCX_VERBOSE(1, "ucp_ep_create failed: %d", status);
-        ret = OPAL_ERROR;
+        return OPAL_ERROR;
     }
     return OPAL_SUCCESS;
 }
+
+
 
 OPAL_DECLSPEC int opal_common_ucx_mem_op(opal_common_ucx_mem_t *mem,
                                          opal_common_ucx_op_t op,
@@ -905,46 +1127,57 @@ OPAL_DECLSPEC int opal_common_ucx_mem_op(opal_common_ucx_mem_t *mem,
                                          uint64_t rem_addr)
 {
     _tlocal_table_t *tls = NULL;
-    _worker_info_t *worker_info;
+    _tlocal_ctx_t *ctx_rec;
+    _worker_info_t *winfo;
+    _tlocal_mem_t *mem_rec;
     _mem_info_t *mem_info;
     ucp_ep_h ep;
     ucp_rkey_h rkey;
+    ucs_status_t status;
+    int rc;
 
-    tls = pthread_get_specific(_tlocal_key);
-    if( OPAL_UNLIKELY(NULL == tls) ) {
-        tls = _common_ucx_init_tls(mem->ctx->wpool);
-    }
+    tls = _tlocal_get_tls(mem->ctx->wpool);
     /* Obtain the worker structure */
-    worker_info = _tlocal_search_ctx(tls, mem->ctx->ctx_id);
-    if (OPAL_UNLIKELY(NULL == worker_info)) {
-        worker_info = _tlocal_add_ctx(tls, mem->ctx);
+    ctx_rec = _tlocal_ctx_search(tls, mem->ctx->ctx_id);
+    if (OPAL_UNLIKELY(NULL == ctx_rec)) {
+        ctx_rec = _tlocal_add_ctx(tls, mem->ctx);
+        if (NULL == ctx_rec) {
+            // TODO: err handling
+        }
     }
+    winfo = ctx_rec->winfo;
 
     /* Obtain the endpoint */
-    if (OPAL_UNLIKELY(NULL == worker_info->endpoints[target])) {
-        if (rc = _tlocal_ctx_connect(worker_info, target)) {
+    if (OPAL_UNLIKELY(NULL == winfo->endpoints[target])) {
+        rc = _tlocal_ctx_connect(ctx_rec, target);
+        if (rc) {
             return rc;
         }
     }
-    ep = worker_info->endpoints[target];
+    ep = winfo->endpoints[target];
 
     /* Obtain the memory region info */
-    mem_info = _tlocal_search_mem(tls, mem->mem_id);
-    if (OPAL_UNLIKELY(mem_info == NULL)) {
-        mem_info = _tlocal_add_mem(tls, mem->mem_id);
+    mem_rec = _tlocal_search_mem(tls, mem->mem_id);
+    if (OPAL_UNLIKELY(mem_rec == NULL)) {
+        mem_rec = _tlocal_add_mem(tls, mem);
+        if (NULL == mem_rec) {
+            // TODO: err handling
+        }
     }
+    mem_info = mem_rec->mem;
 
     /* Obtain the rkey */
     if (OPAL_UNLIKELY(NULL == mem_info->rkeys[target])) {
         // Create the rkey
-        if (rc = _tlocal_mem_rkey_create(mem_info, target)) {
+        rc = _tlocal_mem_create_rkey(mem_rec, ep, target);
+        if (rc) {
             return rc;
         }
     }
     rkey = mem_info->rkeys[target];
 
     /* Perform the operation */
-    opal_mutex_lock(worker_info->mutex);
+    opal_mutex_lock(&winfo->mutex);
     switch(op){
     case OPAL_COMMON_UCX_GET:
         status = ucp_put_nbi(ep, buffer,len, rem_addr, rkey);
@@ -963,26 +1196,33 @@ OPAL_DECLSPEC int opal_common_ucx_mem_op(opal_common_ucx_mem_t *mem,
         }
         break;
     }
-    opal_mutex_unlock(worker_info->mutex);
+    opal_mutex_unlock(&winfo->mutex);
+    return OPAL_SUCCESS;
 }
 
-int opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
-                              opal_common_ucx_flush_scope_t scope,
-                              int target)
+OPAL_DECLSPEC void
+opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
+                          opal_common_ucx_flush_scope_t scope,
+                          int target)
 {
     _worker_list_item_t *item;
-    opal_mutex_lock(&mem->ctx->mutex);
+    opal_common_ucx_ctx_t *ctx = mem->ctx;
+    opal_mutex_lock(&ctx->mutex);
     OPAL_LIST_FOREACH(item, &ctx->workers, _worker_list_item_t) {
         switch (scope) {
         case OPAL_COMMON_UCX_SCOPE_WORKER:
+            opal_mutex_lock(&item->ptr->winfo->mutex);
             opal_common_ucx_worker_flush(item->ptr->winfo->worker);
+            opal_mutex_unlock(&item->ptr->winfo->mutex);
             break;
         case OPAL_COMMON_UCX_SCOPE_EP:
             if (NULL != item->ptr->winfo->endpoints[target] ) {
+                opal_mutex_lock(&item->ptr->winfo->mutex);
                 opal_common_ucx_ep_flush(item->ptr->winfo->endpoints[target],
                                          item->ptr->winfo->worker);
+                opal_mutex_unlock(&item->ptr->winfo->mutex);
             }
         }
     }
-    opal_mutex_unlock(&mem->ctx->mutex);
+    opal_mutex_unlock(&ctx->mutex);
 }
