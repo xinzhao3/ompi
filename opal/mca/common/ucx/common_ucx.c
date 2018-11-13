@@ -27,7 +27,6 @@ typedef struct  {
     size_t comm_size;
 } _worker_info_t;
 
-OBJ_CLASS_DECLARATION(_worker_info_t);
 
 typedef struct {
     int ctx_id;
@@ -36,14 +35,10 @@ typedef struct {
     _worker_info_t *winfo;
 } _tlocal_ctx_t;
 
-OBJ_CLASS_DECLARATION(_tlocal_ctx_t);
-
 typedef struct {
     _worker_info_t *worker;
     ucp_rkey_h *rkeys;
 } _mem_info_t;
-
-OBJ_CLASS_DECLARATION(_mem_info_t);
 
 typedef struct {
     int mem_id;
@@ -51,8 +46,6 @@ typedef struct {
     opal_common_ucx_mem_t *gmem;
     _mem_info_t *mem;
 } _tlocal_mem_t;
-
-OBJ_CLASS_DECLARATION(_tlocal_mem_t);
 
 typedef struct {
     opal_list_item_t super;
@@ -460,7 +453,7 @@ OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
         goto err_worker_create;
     }
 
-    wkr = OBJ_NEW(_worker_info_t);
+    wkr = calloc(1, sizeof(_worker_info_t));
     OBJ_CONSTRUCT(&wkr->mutex, opal_mutex_t);
     wkr->worker = wpool->recv_worker;
     wkr->endpoints = NULL;
