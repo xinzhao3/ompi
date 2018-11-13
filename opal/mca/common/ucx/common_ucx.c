@@ -99,9 +99,7 @@ opal_common_ucx_mem_op(opal_common_ucx_mem_t *mem,
                        int target,
                        void *buffer, size_t len,
                        uint64_t rem_addr);
-OPAL_DECLSPEC void opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
-                                             opal_common_ucx_flush_scope_t scope,
-                                             int target);
+
 
 static int _tlocal_tls_ctxtbl_extend(_tlocal_table_t *tbl, size_t append);
 static int _tlocal_tls_memtbl_extend(_tlocal_table_t *tbl, size_t append);
@@ -1118,13 +1116,9 @@ static int _tlocal_mem_create_rkey(_tlocal_mem_t *mem_rec, ucp_ep_h ep, int targ
     return OPAL_SUCCESS;
 }
 
-
-
-OPAL_DECLSPEC int opal_common_ucx_mem_op(opal_common_ucx_mem_t *mem,
-                                         opal_common_ucx_op_t op,
-                                         int target,
-                                         void *buffer, size_t len,
-                                         uint64_t rem_addr)
+static inline int _tlocal_fetch(opal_common_ucx_mem_t *mem, int target,
+                                ucp_ep_h *_ep, ucp_rkey_h *_rkey,
+                                _worker_info_t **_winfo)
 {
     _tlocal_table_t *tls = NULL;
     _tlocal_ctx_t *ctx_rec;
@@ -1133,7 +1127,6 @@ OPAL_DECLSPEC int opal_common_ucx_mem_op(opal_common_ucx_mem_t *mem,
     _mem_info_t *mem_info;
     ucp_ep_h ep;
     ucp_rkey_h rkey;
-    ucs_status_t status;
     int rc;
 
     tls = _tlocal_get_tls(mem->ctx->wpool);
@@ -1143,6 +1136,7 @@ OPAL_DECLSPEC int opal_common_ucx_mem_op(opal_common_ucx_mem_t *mem,
         ctx_rec = _tlocal_add_ctx(tls, mem->ctx);
         if (NULL == ctx_rec) {
             // TODO: err handling
+            return OPAL_ERR_OUT_OF_RESOURCE;
         }
     }
     winfo = ctx_rec->winfo;
@@ -1162,6 +1156,7 @@ OPAL_DECLSPEC int opal_common_ucx_mem_op(opal_common_ucx_mem_t *mem,
         mem_rec = _tlocal_add_mem(tls, mem);
         if (NULL == mem_rec) {
             // TODO: err handling
+            return OPAL_ERR_OUT_OF_RESOURCE;
         }
     }
     mem_info = mem_rec->mem;
@@ -1174,9 +1169,34 @@ OPAL_DECLSPEC int opal_common_ucx_mem_op(opal_common_ucx_mem_t *mem,
             return rc;
         }
     }
-    rkey = mem_info->rkeys[target];
 
-    /* Perform the operation */
+    *_ep = ep;
+    *_rkey = rkey = mem_info->rkeys[target];
+    *_winfo = winfo;
+    return OPAL_SUCCESS;
+}
+
+
+
+OPAL_DECLSPEC int opal_common_ucx_mem_putget(opal_common_ucx_mem_t *mem,
+                                         opal_common_ucx_op_t op,
+                                         int target,
+                                         void *buffer, size_t len,
+                                         uint64_t rem_addr)
+{
+    ucp_ep_h ep;
+    ucp_rkey_h rkey;
+    ucs_status_t status;
+    _worker_info_t *winfo;
+    int rc;
+
+    rc =_tlocal_fetch(mem, target, &ep, &rkey, &winfo);
+    if( rc ){
+        // TODO: err handling
+        return rc;
+    }
+
+        /* Perform the operation */
     opal_mutex_lock(&winfo->mutex);
     switch(op){
     case OPAL_COMMON_UCX_GET:
@@ -1200,6 +1220,109 @@ OPAL_DECLSPEC int opal_common_ucx_mem_op(opal_common_ucx_mem_t *mem,
     return OPAL_SUCCESS;
 }
 
+
+OPAL_DECLSPEC int opal_common_ucx_mem_cmpswp(opal_common_ucx_mem_t *mem,
+                                             uint64_t compare, uint64_t value,
+                                             int target,
+                                             void *buffer, size_t len,
+                                             uint64_t rem_addr)
+{
+    ucp_ep_h ep;
+    ucp_rkey_h rkey;
+    _worker_info_t *winfo;
+    ucs_status_t status;
+    int rc;
+
+    rc =_tlocal_fetch(mem, target, &ep, &rkey, &winfo);
+    if( rc ){
+        // TODO: err handling
+        return rc;
+    }
+
+    /* Perform the operation */
+    opal_mutex_lock(&winfo->mutex);
+    status = opal_common_ucx_atomic_cswap(ep, compare, value,
+                                          buffer, len,
+                                          rem_addr, rkey,
+                                          winfo->worker);
+    if (status != UCS_OK) {
+        // TODO: OSC_UCX_VERBOSE(1, "ucp_atomic_cswap64 failed: %d", status);
+        return OPAL_ERROR;
+    }
+    opal_mutex_unlock(&winfo->mutex);
+    return OPAL_SUCCESS;
+}
+
+OPAL_DECLSPEC int opal_common_ucx_mem_fetch(opal_common_ucx_mem_t *mem,
+                                            ucp_atomic_fetch_op_t opcode, uint64_t value,
+                                            int target,
+                                            void *buffer, size_t len,
+                                            uint64_t rem_addr)
+{
+    ucp_ep_h ep;
+    ucp_rkey_h rkey;
+    _worker_info_t *winfo;
+    ucs_status_t status;
+    int rc;
+
+    rc =_tlocal_fetch(mem, target, &ep, &rkey, &winfo);
+    if( rc ){
+        // TODO: err handling
+        return rc;
+    }
+
+    /* Perform the operation */
+    opal_mutex_lock(&winfo->mutex);
+    status = opal_common_ucx_atomic_fetch(ep, opcode, value,
+                                          buffer, len,
+                                          rem_addr, rkey,
+                                          winfo->worker);
+    if (status != UCS_OK) {
+        // TODO: OSC_UCX_VERBOSE(1, "ucp_atomic_cswap64 failed: %d", status);
+        return OPAL_ERROR;
+    }
+    opal_mutex_unlock(&winfo->mutex);
+    return OPAL_SUCCESS;
+}
+
+//ucs_status_t ucp_atomic_post(ucp_ep_h ep, ucp_atomic_post_op_t opcode, uint64_t value,
+//                             size_t op_size, uint64_t remote_addr, ucp_rkey_h rkey);
+
+
+OPAL_DECLSPEC int opal_common_ucx_mem_post(opal_common_ucx_mem_t *mem,
+                                            ucp_atomic_post_op_t opcode,
+                                           uint64_t value,
+                                            int target,
+                                            size_t len,
+                                            uint64_t rem_addr)
+{
+    ucp_ep_h ep;
+    ucp_rkey_h rkey;
+    _worker_info_t *winfo;
+    ucs_status_t status;
+    int rc;
+
+    rc =_tlocal_fetch(mem, target, &ep, &rkey, &winfo);
+    if( rc ){
+        // TODO: err handling
+        return rc;
+    }
+
+    /* Perform the operation */
+    opal_mutex_lock(&winfo->mutex);
+    status = ucp_atomic_post(ep, opcode, value,
+                             len,
+                             rem_addr, rkey);
+    if (status != UCS_OK) {
+        // TODO: OSC_UCX_VERBOSE(1, "ucp_atomic_cswap64 failed: %d", status);
+        return OPAL_ERROR;
+    }
+    opal_mutex_unlock(&winfo->mutex);
+    return OPAL_SUCCESS;
+}
+
+
+// TODO: return sttaus
 OPAL_DECLSPEC void
 opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
                           opal_common_ucx_flush_scope_t scope,
@@ -1229,4 +1352,5 @@ opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
 
 OPAL_DECLSPEC int opal_common_ucx_workers_progress(opal_common_ucx_wpool_t *wpool) {
     // TODO
+    return 0;
 }

@@ -165,7 +165,32 @@ OPAL_DECLSPEC int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int com
                                              opal_common_ucx_exchange_func_t exchange_func,
                                              void *exchange_metadata,
                                              opal_common_ucx_mem_t **mem_ptr);
+OPAL_DECLSPEC void opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
+                                             opal_common_ucx_flush_scope_t scope,
+                                             int target);
 OPAL_DECLSPEC int opal_common_ucx_workers_progress(opal_common_ucx_wpool_t *wpool);
+OPAL_DECLSPEC int opal_common_ucx_mem_cmpswp(opal_common_ucx_mem_t *mem,
+                                             uint64_t compare, uint64_t value,
+                                             int target,
+                                             void *buffer, size_t len,
+                                             uint64_t rem_addr);
+OPAL_DECLSPEC int opal_common_ucx_mem_putget(opal_common_ucx_mem_t *mem,
+                                         opal_common_ucx_op_t op,
+                                         int target,
+                                         void *buffer, size_t len,
+                                         uint64_t rem_addr);
+OPAL_DECLSPEC int opal_common_ucx_mem_fetch(opal_common_ucx_mem_t *mem,
+                                            ucp_atomic_fetch_op_t opcode, uint64_t value,
+                                            int target,
+                                            void *buffer, size_t len,
+                                            uint64_t rem_addr);
+OPAL_DECLSPEC int opal_common_ucx_mem_post(opal_common_ucx_mem_t *mem,
+                                            ucp_atomic_post_op_t opcode,
+                                           uint64_t value,
+                                            int target,
+                                            size_t len,
+                                            uint64_t rem_addr);
+
 
 
 OPAL_DECLSPEC void opal_common_ucx_mca_register(void);
