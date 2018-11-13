@@ -416,6 +416,7 @@ OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
     wpool->refcnt++;
     wpool->cur_ctxid = wpool->cur_memid = 0;
     OBJ_CONSTRUCT(&wpool->mutex, opal_mutex_t);
+    OBJ_CONSTRUCT(&wpool->tls_list, opal_list_t);
 
     status = ucp_config_read("MPI", NULL, &config);
     if (UCS_OK != status) {
@@ -455,6 +456,7 @@ OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
 
     wkr = calloc(1, sizeof(_worker_info_t));
     OBJ_CONSTRUCT(&wkr->mutex, opal_mutex_t);
+
     wkr->worker = wpool->recv_worker;
     wkr->endpoints = NULL;
     wkr->comm_size = 0;
@@ -512,7 +514,7 @@ OPAL_DECLSPEC void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool
     opal_mutex_unlock(&wpool->mutex);
 
     OBJ_DESTRUCT(&wpool->idle_workers);
-
+    OBJ_DESTRUCT(&wpool->tls_list);
     OBJ_DESTRUCT(&wpool->mutex);
     ucp_worker_release_address(wpool->recv_worker, wpool->recv_waddr);
     ucp_worker_destroy(wpool->recv_worker);
@@ -636,7 +638,7 @@ static int _comm_ucx_mem_map(opal_common_ucx_wpool_t *wpool,
     if (status != UCS_OK) {
         MCA_COMMON_UCX_VERBOSE(1, "ucp_mem_map failed: %d", status);
         ret = OPAL_ERROR;
-        goto error;
+        return ret;
     }
 
     mem_attrs.field_mask = UCP_MEM_ATTR_FIELD_ADDRESS | UCP_MEM_ATTR_FIELD_LENGTH;
@@ -963,7 +965,7 @@ static int _tlocal_ctx_connect(_tlocal_ctx_t *ctx_rec, int target)
     displ = gctx->recv_worker_displs[target];
     ep_params.address = (ucp_address_t *)&(gctx->recv_worker_addrs[displ]);
     status = ucp_ep_create(winfo->worker, &ep_params, &winfo->endpoints[target]);
-    opal_mutex_lock(&winfo->mutex);
+    opal_mutex_unlock(&winfo->mutex);
 
     if (status != UCS_OK) {
 //        TODO: error out here
