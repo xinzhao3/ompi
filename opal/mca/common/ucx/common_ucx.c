@@ -1468,6 +1468,7 @@ int opal_common_ucx_workers_progress(opal_common_ucx_wpool_t *wpool) {
     if (enter == 0) {
         printf("opal_common_ucx_workres_progress: wpool = %p\n", (void *)wpool);
     }
+
     enter++;
     return OPAL_SUCCESS;
 }
