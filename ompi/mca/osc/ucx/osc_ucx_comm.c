@@ -67,18 +67,14 @@ static inline int check_sync_state(ompi_osc_ucx_module_t *module, int target,
 }
 
 static inline int incr_and_check_ops_num(ompi_osc_ucx_module_t *module, int target) {
-    //int status;
-
+    int status;
     module->global_ops_num++;
     module->per_target_ops_nums[target]++;
     if (module->global_ops_num >= OSC_UCX_OPS_THRESHOLD) {
-        // TODO:
-        /*status =*/ opal_common_ucx_mem_flush(module->mem, OPAL_COMMON_UCX_SCOPE_EP, target);
-/*
+        status = opal_common_ucx_mem_flush(module->mem, OPAL_COMMON_UCX_SCOPE_EP, target);
         if (status != OMPI_SUCCESS) {
             return status;
         }
-*/
         module->global_ops_num -= module->per_target_ops_nums[target];
         module->per_target_ops_nums[target] = 0;
     }
