@@ -557,6 +557,8 @@ void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
 {
     _tlocal_table_t *tls_item = NULL, *tls_next;
 
+    DBG_OUT("opal_common_ucx_wpool_finalize(start): wpool = %p\n", (void *)wpool);
+
     wpool->refcnt--;
     if (wpool->refcnt > 0) {
         DBG_OUT("opal_common_ucx_wpool_finalize: wpool = %p\n", (void *)wpool);
@@ -569,6 +571,7 @@ void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
     OPAL_LIST_FOREACH_SAFE(tls_item, tls_next, &wpool->tls_list, _tlocal_table_t) {
         opal_list_remove_item(&wpool->tls_list, &tls_item->super);
         _common_ucx_tls_cleanup(tls_item);
+        DBG_OUT("opal_common_ucx_wpool_finalize: cleanup wpool = %p\n", (void *)wpool);
     }
 
     /* Go over the list, free idle list items */

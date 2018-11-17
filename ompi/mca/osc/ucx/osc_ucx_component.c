@@ -482,7 +482,7 @@ int ompi_osc_ucx_win_attach(struct ompi_win_t *win, void *base, size_t len) {
                 (OMPI_OSC_UCX_ATTACH_MAX - (insert_index + 1)) * sizeof(ompi_osc_dynamic_win_info_t));
     } else {
         insert_index = 0;
-    }
+    }*/
 /*
     ret = mem_map(&base, len, &(module->local_dynamic_win_info[insert_index].memh),
                   module, MPI_WIN_FLAVOR_CREATE);
@@ -553,7 +553,7 @@ int ompi_osc_ucx_win_detach(struct ompi_win_t *win, const void *base) {
 
 int ompi_osc_ucx_free(struct ompi_win_t *win) {
     ompi_osc_ucx_module_t *module = (ompi_osc_ucx_module_t*) win->w_osc_module;
-    int i, ret;
+    int ret;
 
     assert(module->global_ops_num == 0);
     assert(module->lock_count == 0);
@@ -585,13 +585,18 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
     free(module->win_info_array);
     free(module->state_info_array);
 
-    free(module->per_target_ops_nums);
-
     if ((module->flavor == MPI_WIN_FLAVOR_ALLOCATE || module->flavor == MPI_WIN_FLAVOR_CREATE)
         && module->size > 0) {
         ucp_mem_unmap(mca_osc_ucx_component.ucp_context, module->memh);
     }
     ucp_mem_unmap(mca_osc_ucx_component.ucp_context, module->state_memh);
+
+
+    return ret;
+    */
+    free(module->per_target_ops_nums);
+
+    opal_common_ucx_wpool_finalize(mca_osc_ucx_component.wpool);
 
     if (module->disp_units) free(module->disp_units);
     ompi_comm_free(&module->comm);
@@ -599,8 +604,5 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
     free(module);
     ompi_osc_ucx_unregister_progress();
 
-    return ret;
-    */
-    opal_common_ucx_wpool_finalize(mca_osc_ucx_component.wpool);
     return OMPI_SUCCESS;
 }
