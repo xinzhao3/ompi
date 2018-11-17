@@ -581,6 +581,10 @@ void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
     }
     opal_mutex_unlock(&wpool->mutex);
 
+    /* Release the address here. recv worker will be released
+     * below along with other idle workers */
+    ucp_worker_release_address(wpool->recv_worker, wpool->recv_waddr);
+
     opal_mutex_lock(&wpool->mutex);
     /* Go over the list, free idle list items */
     if (!opal_list_is_empty(&wpool->idle_workers)) {
@@ -600,8 +604,6 @@ void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
     OBJ_DESTRUCT(&wpool->idle_workers);
     OBJ_DESTRUCT(&wpool->tls_list);
     OBJ_DESTRUCT(&wpool->mutex);
-    ucp_worker_release_address(wpool->recv_worker, wpool->recv_waddr);
-    ucp_worker_destroy(wpool->recv_worker);
     ucp_cleanup(wpool->ucp_ctx);
     DBG_OUT("opal_common_ucx_wpool_finalize: wpool = %p\n", (void *)wpool);
     return;
