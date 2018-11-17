@@ -592,7 +592,7 @@ int opal_common_ucx_ctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
     }
 
     (*ctx_ptr) = ctx;
-    DBG_OUT("opal_common_ucx_wpool_create: wpool = %p, (*ctx_ptr) = %p\n", (void *)wpool, (void *)(*ctx_ptr));
+    DBG_OUT("opal_common_ucx_ctx_create: wpool = %p, (*ctx_ptr) = %p\n", (void *)wpool, (void *)(*ctx_ptr));
     return ret;
 
  error:
@@ -944,7 +944,7 @@ _tlocal_ctx_search(_tlocal_table_t *tls, int ctx_id)
             return tls->ctx_tbl[i];
         }
     }
-    DBG_OUT("_tlocal_tls_memtbl_extend(end): tls = %p ctx_id = %d\n", (void *)tls, ctx_id);
+    DBG_OUT("_tlocal_ctx_search: tls = %p ctx_id = %d\n", (void *)tls, ctx_id);
     return NULL;
 }
 
@@ -1228,11 +1228,17 @@ static inline int _tlocal_fetch(opal_common_ucx_mem_t *mem, int target,
     ucp_rkey_h rkey;
     int rc = OPAL_SUCCESS;
 
+    DBG_OUT("_tlocal_fetch: starttls \n");
+
     tls = _tlocal_get_tls(mem->ctx->wpool);
+
+    DBG_OUT("_tlocal_fetch: tls = %p\n",(void*)tls);
 
     /* Obtain the worker structure */
     ctx_rec = _tlocal_ctx_search(tls, mem->ctx->ctx_id);
-    DBG_OUT("_tlocal_fetch(after _tlocal_ctx_search): tls = %p ctx_id = %d\n", (void *)tls, (int)mem->ctx->ctx_id);
+
+    DBG_OUT("_tlocal_fetch(after _tlocal_ctx_search): ctx_id = %d, ctx_rec=%p\n",
+            (int)mem->ctx->ctx_id, ctx_rec);
     if (OPAL_UNLIKELY(NULL == ctx_rec)) {
         ctx_rec = _tlocal_add_ctx(tls, mem->ctx);
         if (NULL == ctx_rec) {
@@ -1241,6 +1247,7 @@ static inline int _tlocal_fetch(opal_common_ucx_mem_t *mem, int target,
         DBG_OUT("_tlocal_fetch(after _tlocal_add_ctx): tls = %p ctx = %p\n", (void *)tls, (void *)mem->ctx);
     }
     winfo = ctx_rec->winfo;
+    DBG_OUT("_tlocal_fetch: winfo = %p ctx=%p\n", (void *)winfo, (void *)mem->ctx);
 
     /* Obtain the endpoint */
     if (OPAL_UNLIKELY(NULL == winfo->endpoints[target])) {
@@ -1251,10 +1258,11 @@ static inline int _tlocal_fetch(opal_common_ucx_mem_t *mem, int target,
         DBG_OUT("_tlocal_fetch(after _tlocal_ctx_connect): ctx_rec = %p target = %d\n", (void *)ctx_rec, target);
     }
     ep = winfo->endpoints[target];
+    DBG_OUT("_tlocal_fetch: ep = %p\n", (void *)ep);
 
     /* Obtain the memory region info */
     mem_rec = _tlocal_search_mem(tls, mem->mem_id);
-    DBG_OUT("_tlocal_fetch(after _tlocal_search_mem): tls = %p mem_id = %d\n", (void *)tls, (int)mem->mem_id);
+    DBG_OUT("_tlocal_fetch: tls = %p mem_rec = %p mem_id = %d\n", (void *)tls, (void *)mem_rec, (int)mem->mem_id);
     if (OPAL_UNLIKELY(mem_rec == NULL)) {
         mem_rec = _tlocal_add_mem(tls, mem);
         DBG_OUT("_tlocal_fetch(after _tlocal_add_mem): tls = %p mem = %p\n", (void *)tls, (void *)mem);
@@ -1263,6 +1271,7 @@ static inline int _tlocal_fetch(opal_common_ucx_mem_t *mem, int target,
         }
     }
     mem_info = mem_rec->mem;
+    DBG_OUT("_tlocal_fetch: mem_info = %p\n", (void *)mem_info);
 
     /* Obtain the rkey */
     if (OPAL_UNLIKELY(NULL == mem_info->rkeys[target])) {
@@ -1271,9 +1280,9 @@ static inline int _tlocal_fetch(opal_common_ucx_mem_t *mem, int target,
         if (rc) {
             return rc;
         }
-        DBG_OUT("_tlocal_fetch(after _tlocal_mem_create_rkey): mem_rec = %p ep = %p, target = %d\n",
-        		(void *)mem_rec, (void *)ep, target);
+        DBG_OUT("_tlocal_fetch: creating rkey ...\n");
     }
+    DBG_OUT("_tlocal_fetch: rkey = %p\n", (void *)rkey);
 
     *_ep = ep;
     *_rkey = rkey = mem_info->rkeys[target];
