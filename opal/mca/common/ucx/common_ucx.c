@@ -395,7 +395,9 @@ int _wpool_add_to_idle(opal_common_ucx_wpool_t *wpool, _worker_info_t *winfo)
     if(winfo->comm_size != 0) {
         size_t i;
         for (i = 0; i < winfo->comm_size; i++) {
-            ucp_ep_destroy(winfo->endpoints[i]);
+            if (NULL != winfo->endpoints[i]){
+                ucp_ep_destroy(winfo->endpoints[i]);
+            }
         }
         free(winfo->endpoints);
         winfo->endpoints = NULL;
