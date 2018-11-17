@@ -573,9 +573,14 @@ void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
     opal_mutex_lock(&wpool->mutex);
     OPAL_LIST_FOREACH_SAFE(tls_item, tls_next, &wpool->tls_list, _tlocal_table_t) {
         opal_list_remove_item(&wpool->tls_list, &tls_item->super);
+        opal_mutex_unlock(&wpool->mutex);
+
         _common_ucx_tls_cleanup(tls_item);
+
+        opal_mutex_lock(&wpool->mutex);
         DBG_OUT("opal_common_ucx_wpool_finalize: cleanup wpool = %p\n", (void *)wpool);
     }
+    opal_mutex_unlock(&wpool->mutex);
 
     /* Go over the list, free idle list items */
     if (!opal_list_is_empty(&wpool->idle_workers)) {
