@@ -878,7 +878,10 @@ static _tlocal_table_t* _common_ucx_tls_init(opal_common_ucx_wpool_t *wpool)
         return NULL;
     }
 
-    memset(tls, 0, sizeof(*tls));
+    tls->ctx_tbl = NULL;
+    tls->ctx_tbl_size = 0;
+    tls->mem_tbl = NULL;
+    tls->mem_tbl_size = 0;
 
     /* Add this TLS to the global wpool structure for future
      * cleanup purposes */
