@@ -345,6 +345,8 @@ static inline void _cleanup_tlocal(void *arg)
     _tlocal_table_t *tls = (_tlocal_table_t *)arg;
     opal_common_ucx_wpool_t *wpool = NULL;
 
+    DBG_OUT("_cleanup_tlocal: start\n");
+
     if (NULL == tls) {
         return;
     }
