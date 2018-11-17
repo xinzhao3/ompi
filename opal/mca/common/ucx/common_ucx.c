@@ -1351,7 +1351,6 @@ static inline int _tlocal_fetch(opal_common_ucx_mem_t *mem, int target,
         }
         DBG_OUT("_tlocal_fetch: creating rkey ...\n");
     }
-    DBG_OUT("_tlocal_fetch: rkey = %p\n", (void *)rkey);
 
     *_ep = ep;
     *_rkey = rkey = mem_info->rkeys[target];
