@@ -122,14 +122,19 @@ void init_tls_dbg(void)
 static int _tlocal_tls_ctxtbl_extend(_tlocal_table_t *tbl, size_t append);
 static int _tlocal_tls_memtbl_extend(_tlocal_table_t *tbl, size_t append);
 static _tlocal_table_t* _common_ucx_tls_init(opal_common_ucx_wpool_t *wpool);
+static void _common_ucx_tls_cleanup(_tlocal_table_t *tls);
 static inline _tlocal_ctx_t *_tlocal_ctx_search(_tlocal_table_t *tls, int ctx_id);
-static int _tlocal_cleanup_ctx_record(_tlocal_ctx_t *ctx_rec);
+static int _tlocal_ctx_record_cleanup(_tlocal_ctx_t *ctx_rec);
 static _tlocal_ctx_t *_tlocal_add_ctx(_tlocal_table_t *tls, opal_common_ucx_ctx_t *ctx);
 static int _tlocal_ctx_connect(_tlocal_ctx_t *ctx, int target);
 static int _tlocal_ctx_release(opal_common_ucx_ctx_t *ctx);
 static inline _tlocal_mem_t *_tlocal_search_mem(_tlocal_table_t *tls, int mem_id);
 static _tlocal_mem_t *_tlocal_add_mem(_tlocal_table_t *tls, opal_common_ucx_mem_t *mem);
 static int _tlocal_mem_create_rkey(_tlocal_mem_t *mem_rec, ucp_ep_h ep, int target);
+// TOD: Return the error from it
+static void _tlocal_mem_record_cleanup(_tlocal_mem_t *mem_rec);
+
+
 
 /***********************************************************************/
 
@@ -336,8 +341,26 @@ OPAL_DECLSPEC int opal_common_ucx_del_procs(opal_common_ucx_del_proc_t *procs, s
 
 static inline void _cleanup_tlocal(void *arg)
 {
-    // 1. Cleanup all rkeys in the window table
-    // 2. Return all workers into the idle pool
+    _tlocal_table_t *item = NULL, *next;
+    _tlocal_table_t *tls = (_tlocal_table_t *)arg;
+    opal_common_ucx_wpool_t *wpool = NULL;
+
+    if (NULL == tls) {
+        return;
+    }
+
+    wpool = tls->wpool;
+    /* 1. Remove us from tls_list */
+    tls->wpool = wpool;
+    opal_mutex_lock(&wpool->mutex);
+    OPAL_LIST_FOREACH_SAFE(item, next, &wpool->tls_list, _tlocal_table_t) {
+        if (item == tls) {
+            opal_list_remove_item(&wpool->tls_list, &item->super);
+            _common_ucx_tls_cleanup(tls);
+            break;
+        }
+    }
+    opal_mutex_unlock(&wpool->mutex);
 }
 
 static
@@ -411,10 +434,6 @@ _worker_info_t* _wpool_remove_from_idle(opal_common_ucx_wpool_t *wpool)
     DBG_OUT("_wpool_remove_from_idle: wpool = %p\n", (void *)wpool);
     return wkr;
 }
-
-
-
-
 
 OPAL_DECLSPEC
 opal_common_ucx_wpool_t * opal_common_ucx_wpool_allocate(void)
@@ -534,14 +553,23 @@ err_get_addr:
 OPAL_DECLSPEC
 void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
 {
+    _tlocal_table_t *tls_item = NULL, *tls_next;
+
     wpool->refcnt--;
     if (wpool->refcnt > 0) {
         DBG_OUT("opal_common_ucx_wpool_finalize: wpool = %p\n", (void *)wpool);
         return;
     }
 
-    /* Go over the list, free idle list items */
+    pthread_key_delete(_tlocal_key);
+
     opal_mutex_lock(&wpool->mutex);
+    OPAL_LIST_FOREACH_SAFE(tls_item, tls_next, &wpool->tls_list, _tlocal_table_t) {
+        opal_list_remove_item(&wpool->tls_list, &tls_item->super);
+        _common_ucx_tls_cleanup(tls_item);
+    }
+
+    /* Go over the list, free idle list items */
     if (!opal_list_is_empty(&wpool->idle_workers)) {
         _idle_list_item_t *item, *next;
         OPAL_LIST_FOREACH_SAFE(item, next, &wpool->idle_workers, _idle_list_item_t) {
@@ -833,7 +861,6 @@ _common_ucx_mem_remove(opal_common_ucx_mem_t *mem, _tlocal_mem_t *mem_rec)
          * we can safely release communication context structure */
         _common_ucx_mem_free(mem);
     }
-
     DBG_OUT("_common_ucx_mem_remove(end): mem = %p mem_rec = %p\n", (void *)mem, (void *)mem_rec);
     return;
 }
@@ -842,8 +869,13 @@ _common_ucx_mem_remove(opal_common_ucx_mem_t *mem, _tlocal_mem_t *mem_rec)
 // TODO: don't want to inline this function
 static _tlocal_table_t* _common_ucx_tls_init(opal_common_ucx_wpool_t *wpool)
 {
-    _tlocal_table_t *tls = NULL;
-    tls = OBJ_NEW(_tlocal_table_t);
+    _tlocal_table_t *tls = OBJ_NEW(_tlocal_table_t);
+
+    if (tls == NULL) {
+        // return OPAL_ERR_OUT_OF_RESOURCE
+        return NULL;
+    }
+
     memset(tls, 0, sizeof(*tls));
 
     /* Add this TLS to the global wpool structure for future
@@ -876,6 +908,41 @@ _tlocal_get_tls(opal_common_ucx_wpool_t *wpool){
     DBG_OUT("_tlocal_get_tls(end): wpool = %p tls = %p\n", (void *)wpool, (void *)tls);
     return tls;
 }
+
+_worker_list_item_t *item = NULL, *next;
+
+// TODO: don't want to inline this function
+static void _common_ucx_tls_cleanup(_tlocal_table_t *tls)
+{
+    size_t i, size;
+
+    // Cleanup memory table
+    size = tls->mem_tbl_size;
+    for (i = 0; i < size; i++) {
+
+        if (!tls->mem_tbl[i]->mem_id){
+            continue;
+        }
+        _tlocal_mem_record_cleanup(tls->mem_tbl[i]);
+        free(tls->mem_tbl[i]);
+    }
+
+    // Cleanup ctx table
+    size = tls->ctx_tbl_size;
+    for (i = 0; i < size; i++) {
+        _tlocal_ctx_record_cleanup(tls->ctx_tbl[i]);
+        free(tls->ctx_tbl[i]);
+    }
+
+    pthread_setspecific(_tlocal_key, NULL);
+    DBG_OUT("_common_ucx_tls_cleanup(end): tls = %p\n", (void *)tls);
+
+    OBJ_RELEASE(tls);
+
+    return;
+}
+
+
 
 static int
 _tlocal_tls_get_worker(_tlocal_table_t *tls, _worker_info_t **_winfo)
@@ -949,7 +1016,7 @@ _tlocal_ctx_search(_tlocal_table_t *tls, int ctx_id)
 }
 
 static int
-_tlocal_cleanup_ctx_record(_tlocal_ctx_t *ctx_rec)
+_tlocal_ctx_record_cleanup(_tlocal_ctx_t *ctx_rec)
 {
     int rc;
     if (!ctx_rec->is_freed) {
@@ -987,7 +1054,7 @@ _tlocal_add_ctx(_tlocal_table_t *tls, opal_common_ucx_ctx_t *ctx)
         }
         if (tls->ctx_tbl[i]->is_freed ) {
             /* Found dirty record, need to clean first */
-            _tlocal_cleanup_ctx_record(tls->ctx_tbl[i]);
+            _tlocal_ctx_record_cleanup(tls->ctx_tbl[i]);
             break;
         }
     }
@@ -1238,7 +1305,7 @@ static inline int _tlocal_fetch(opal_common_ucx_mem_t *mem, int target,
     ctx_rec = _tlocal_ctx_search(tls, mem->ctx->ctx_id);
 
     DBG_OUT("_tlocal_fetch(after _tlocal_ctx_search): ctx_id = %d, ctx_rec=%p\n",
-            (int)mem->ctx->ctx_id, ctx_rec);
+            (int)mem->ctx->ctx_id, (void *)ctx_rec);
     if (OPAL_UNLIKELY(NULL == ctx_rec)) {
         ctx_rec = _tlocal_add_ctx(tls, mem->ctx);
         if (NULL == ctx_rec) {
