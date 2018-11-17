@@ -30,6 +30,7 @@ typedef struct  {
 
 typedef struct {
     int ctx_id;
+    // TODO: make sure that this is being set by external thread
     int is_freed;
     opal_common_ucx_ctx_t *gctx;
     _worker_info_t *winfo;
@@ -930,7 +931,6 @@ static void _common_ucx_tls_cleanup(_tlocal_table_t *tls)
     // Cleanup memory table
     size = tls->mem_tbl_size;
     for (i = 0; i < size; i++) {
-
         if (!tls->mem_tbl[i]->mem_id){
             continue;
         }
@@ -941,6 +941,9 @@ static void _common_ucx_tls_cleanup(_tlocal_table_t *tls)
     // Cleanup ctx table
     size = tls->ctx_tbl_size;
     for (i = 0; i < size; i++) {
+        if (!tls->ctx_tbl[i]->ctx_id){
+            continue;
+        }
         _tlocal_ctx_record_cleanup(tls->ctx_tbl[i]);
         free(tls->ctx_tbl[i]);
     }
@@ -1030,7 +1033,7 @@ static int
 _tlocal_ctx_record_cleanup(_tlocal_ctx_t *ctx_rec)
 {
     int rc;
-    if (ctx_rec->is_freed) {
+    if (0 == ctx_rec->ctx_id) {
         return OPAL_SUCCESS;
     }
     /* Remove myself from the communication context structure
@@ -1157,7 +1160,7 @@ static int _tlocal_ctx_release(opal_common_ucx_ctx_t *ctx)
     		(void *)tls->wpool, (void *)ctx_rec->winfo);
 
     ctx_rec->ctx_id = 0;
-    ctx_rec->is_freed = 1;
+    ctx_rec->is_freed = 0;
     ctx_rec->gctx = NULL;
     ctx_rec->winfo = NULL;
 
@@ -1207,7 +1210,6 @@ _tlocal_mem_record_cleanup(_tlocal_mem_t *mem_rec)
     free(mem_rec->mem);
 
     memset(mem_rec, 0, sizeof(*mem_rec));
-    mem_rec->is_freed = 1;
 }
 
 
