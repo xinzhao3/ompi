@@ -1030,7 +1030,7 @@ static int
 _tlocal_ctx_record_cleanup(_tlocal_ctx_t *ctx_rec)
 {
     int rc;
-    if (!ctx_rec->is_freed) {
+    if (ctx_rec->is_freed) {
         return OPAL_SUCCESS;
     }
     /* Remove myself from the communication context structure
@@ -1157,7 +1157,7 @@ static int _tlocal_ctx_release(opal_common_ucx_ctx_t *ctx)
     		(void *)tls->wpool, (void *)ctx_rec->winfo);
 
     ctx_rec->ctx_id = 0;
-    ctx_rec->is_freed = 0;
+    ctx_rec->is_freed = 1;
     ctx_rec->gctx = NULL;
     ctx_rec->winfo = NULL;
 
@@ -1183,7 +1183,9 @@ static void
 _tlocal_mem_record_cleanup(_tlocal_mem_t *mem_rec)
 {
     size_t i;
-    if (!mem_rec->is_freed) {
+    DBG_OUT("_tlocal_mem_record_cleanup: record=%p, is_freed = %d\n",
+            (void *)mem_rec, mem_rec->is_freed);
+    if (mem_rec->is_freed) {
         return;
     }
     /* Remove myself from the memory context structure
@@ -1205,6 +1207,7 @@ _tlocal_mem_record_cleanup(_tlocal_mem_t *mem_rec)
     free(mem_rec->mem);
 
     memset(mem_rec, 0, sizeof(*mem_rec));
+    mem_rec->is_freed = 1;
 }
 
 
