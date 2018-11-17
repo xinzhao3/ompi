@@ -581,6 +581,7 @@ void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
     }
     opal_mutex_unlock(&wpool->mutex);
 
+    opal_mutex_lock(&wpool->mutex);
     /* Go over the list, free idle list items */
     if (!opal_list_is_empty(&wpool->idle_workers)) {
         _idle_list_item_t *item, *next;
