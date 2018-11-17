@@ -27,7 +27,6 @@ typedef struct  {
     size_t comm_size;
 } _worker_info_t;
 
-
 typedef struct {
     int ctx_id;
     // TODO: make sure that this is being set by external thread
@@ -591,7 +590,7 @@ void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
             curr_worker = item->ptr;
             OBJ_DESTRUCT(&curr_worker->mutex);
             ucp_worker_destroy(curr_worker->worker);
-            OBJ_RELEASE(curr_worker);
+            free(curr_worker);
             OBJ_RELEASE(item);
         }
     }
