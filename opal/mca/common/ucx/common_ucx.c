@@ -608,7 +608,8 @@ int opal_common_ucx_ctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
     opal_common_ucx_ctx_t *ctx = calloc(1, sizeof(*ctx));
     int ret = OPAL_SUCCESS;
 
-    ctx->ctx_id = OPAL_ATOMIC_ADD_FETCH32(&ctx->ctx_id, 1);
+    OPAL_ATOMIC_ADD_FETCH32(&ctx->ctx_id, 1);
+    DBG_OUT("ctx_create: ctx_id = %d\n", (int)ctx->ctx_id);
 
     OBJ_CONSTRUCT(&ctx->mutex, opal_mutex_t);
     OBJ_CONSTRUCT(&ctx->workers, opal_list_t);
@@ -765,7 +766,9 @@ int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int comm_size,
     ucs_status_t status;
     int ret = OPAL_SUCCESS;
 
-    mem->mem_id = OPAL_ATOMIC_ADD_FETCH32(&mem->mem_id, 1);
+    OPAL_ATOMIC_ADD_FETCH32(&mem->mem_id, 1);
+    DBG_OUT("mem_create: mem_id = %d\n", (int)mem->mem_id);
+
     OBJ_CONSTRUCT(&mem->mutex, opal_mutex_t);
     OBJ_CONSTRUCT(&mem->registrations, opal_list_t);
     mem->ctx = ctx;
