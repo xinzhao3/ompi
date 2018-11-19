@@ -24,8 +24,6 @@ static inline int start_shared(ompi_osc_ucx_module_t *module, int target) {
 //    ucs_status_t status;
 //    int ret;
 
-    return OMPI_SUCCESS;
-
     while (true) {
         opal_common_ucx_mem_fetch(module->state_mem, UCP_ATOMIC_FETCH_OP_FADD, 1,
                                   target,
@@ -37,6 +35,7 @@ static inline int start_shared(ompi_osc_ucx_module_t *module, int target) {
 //        }
 
         DBG_OUT("start_shared: after fadd, result_value = %d", (int)result_value);
+
         assert((int64_t)result_value >= 0);
         if (result_value >= TARGET_LOCK_EXCLUSIVE) {
 //            status = ucp_atomic_post(ep, UCP_ATOMIC_POST_OP_ADD, (-1), sizeof(uint64_t),
