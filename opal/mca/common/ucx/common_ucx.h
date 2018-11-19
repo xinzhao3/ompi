@@ -210,7 +210,7 @@ static inline void init_tls_dbg(void)
         gethostname(hname, 127);
         char fname[128];
 
-        sprintf(fname, " %s.%d.log", hname, tid);
+        sprintf(fname, "%s.%d.log", hname, tid);
         tls_pf = fopen(fname, "w");
         initialized = 1;
     }
