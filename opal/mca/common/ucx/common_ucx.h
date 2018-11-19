@@ -218,10 +218,16 @@ static inline void init_tls_dbg(void)
 
 #define DBG_OUT(...)                \
 {                                   \
-    struct timeval start_;           \
-    gettimeofday(&start_, NULL);     \
+    struct timeval start_;          \
+    time_t nowtime_;                \
+    struct tm *nowtm_;              \
+    char tmbuf_[64];                \
+    gettimeofday(&start_, NULL);    \
+    nowtime_ = start_.tv_sec;       \
+    nowtm_ = localtime(&nowtime_);  \
+    strftime(tmbuf_, sizeof(tmbuf_), "%H:%M:%S", nowtm_); \
     init_tls_dbg();                 \
-    fprintf(tls_pf, "[%ld] ", (start_.tv_sec * 1000000 + start_.tv_usec));\
+    fprintf(tls_pf, "[%s.%06ld] ", tmbuf_, start_.tv_usec);\
     fprintf(tls_pf, __VA_ARGS__);    \
 }
 
