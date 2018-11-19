@@ -555,6 +555,8 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
     ompi_osc_ucx_module_t *module = (ompi_osc_ucx_module_t*) win->w_osc_module;
     int ret;
 
+    DBG_OUT("ompi_osc_ucx_free: start, mem = %p\n", (void *)module->mem);
+
     assert(module->global_ops_num == 0);
     assert(module->lock_count == 0);
     assert(opal_list_is_empty(&module->pending_posts) == true);
@@ -572,8 +574,15 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
         OSC_UCX_VERBOSE(1, "opal_common_ucx_worker_flush failed: %d", ret);
     }
 */
+    opal_common_ucx_mem_flush(module->mem, OPAL_COMMON_UCX_SCOPE_WORKER, 0);
+
+    DBG_OUT("ompi_osc_ucx_free: after mem_flush, mem = %p\n", (void *)module->mem);
+
     ret = module->comm->c_coll->coll_barrier(module->comm,
                                              module->comm->c_coll->coll_barrier_module);
+
+    DBG_OUT("ompi_osc_ucx_free: after barrier, mem = %p\n", (void *)module->mem);
+
 /*
     for (i = 0; i < ompi_comm_size(module->comm); i++) {
         if ((module->win_info_array[i]).rkey_init == true) {
