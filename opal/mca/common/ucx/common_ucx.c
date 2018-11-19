@@ -103,6 +103,8 @@ static int _tlocal_mem_create_rkey(_tlocal_mem_t *mem_rec, ucp_ep_h ep, int targ
 static void _tlocal_mem_record_cleanup(_tlocal_mem_t *mem_rec);
 
 
+__thread FILE *tls_pf = NULL;
+__thread int initialized = 0;
 
 /***********************************************************************/
 

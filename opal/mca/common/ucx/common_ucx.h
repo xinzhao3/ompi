@@ -194,8 +194,8 @@ OPAL_DECLSPEC int opal_common_ucx_mem_post(opal_common_ucx_mem_t *mem,
 
 #define FDBG
 #ifdef FDBG
-static __thread FILE *tls_pf = NULL;
-static __thread int initialized = 0;
+extern __thread FILE *tls_pf;
+extern __thread int initialized;
 
 #include  <unistd.h>
 #include <sys/syscall.h>
