@@ -563,17 +563,11 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
     OBJ_DESTRUCT(&module->outstanding_locks);
     OBJ_DESTRUCT(&module->pending_posts);
 
-    /*
     while (module->state.lock != TARGET_LOCK_UNLOCKED) {
         // not sure if this is required
-        ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+        // ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
     }
 
-    ret = opal_common_ucx_worker_flush(mca_osc_ucx_component.ucp_worker);
-    if (OMPI_SUCCESS != ret) {
-        OSC_UCX_VERBOSE(1, "opal_common_ucx_worker_flush failed: %d", ret);
-    }
-*/
     opal_common_ucx_mem_flush(module->mem, OPAL_COMMON_UCX_SCOPE_WORKER, 0);
 
     DBG_OUT("ompi_osc_ucx_free: after mem_flush, mem = %p\n", (void *)module->mem);
