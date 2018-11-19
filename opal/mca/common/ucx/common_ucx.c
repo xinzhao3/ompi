@@ -16,7 +16,7 @@
 #include "opal/memoryhooks/memory.h"
 
 #include <ucm/api/ucm.h>
-#include <pthread.h>
+
 
 /***********************************************************************/
 
@@ -85,38 +85,6 @@ OBJ_CLASS_DECLARATION(_tlocal_table_t);
 OBJ_CLASS_INSTANCE(_tlocal_table_t, opal_list_item_t, NULL, NULL);
 
 static pthread_key_t _tlocal_key = {0};
-
-
-#define FDBG
-#ifdef FDBG
-__thread FILE *tls_pf = NULL;
-__thread int initialized = 0;
-
-#include <sys/syscall.h>
-
-void init_tls_dbg(void)
-{
-    if( !initialized ) {
-        int tid = syscall(__NR_gettid);
-        char hname[128];
-        gethostname(hname, 127);
-        char fname[128];
-
-        sprintf(fname, "%s.%d.log", hname, tid);
-        tls_pf = fopen(fname, "w");
-        initialized = 1;
-    }
-}
-
-#define DBG_OUT(...)                \
-{                                   \
-    init_tls_dbg();                 \
-    fprintf(tls_pf, __VA_ARGS__);    \
-}
-
-#else
-#define DBG_OUT(...)
-#endif
 
 
 static int _tlocal_tls_ctxtbl_extend(_tlocal_table_t *tbl, size_t append);

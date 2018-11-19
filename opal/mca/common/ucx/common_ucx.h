@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 #include <ucp/api/ucp.h>
+#include <pthread.h>
 
 #include "opal/mca/mca.h"
 #include "opal/util/output.h"
@@ -191,7 +192,37 @@ OPAL_DECLSPEC int opal_common_ucx_mem_post(opal_common_ucx_mem_t *mem,
                                             size_t len,
                                             uint64_t rem_addr);
 
+#define FDBG
+#ifdef FDBG
+static __thread FILE *tls_pf = NULL;
+static __thread int initialized = 0;
 
+#include  <unistd.h>
+#include <sys/syscall.h>
+
+static inline void init_tls_dbg(void)
+{
+    if( !initialized ) {
+        int tid = syscall(__NR_gettid);
+        char hname[128];
+        gethostname(hname, 127);
+        char fname[128];
+
+        sprintf(fname, "%s.%d.log", hname, tid);
+        tls_pf = fopen(fname, "w");
+        initialized = 1;
+    }
+}
+
+#define DBG_OUT(...)                \
+{                                   \
+    init_tls_dbg();                 \
+    fprintf(tls_pf, __VA_ARGS__);    \
+}
+
+#else
+#define DBG_OUT(...)
+#endif
 
 OPAL_DECLSPEC void opal_common_ucx_mca_register(void);
 OPAL_DECLSPEC void opal_common_ucx_mca_deregister(void);

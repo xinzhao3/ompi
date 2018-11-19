@@ -268,6 +268,8 @@ int ompi_osc_ucx_unlock_all(struct ompi_win_t *win) {
     int comm_size = ompi_comm_size(module->comm);
     int ret = OMPI_SUCCESS;
 
+    DBG_OUT("ompi_osc_ucx_unlock_all: start, mem = %p\n", (void *)module->mem);
+
     if (module->epoch_type.access != PASSIVE_ALL_EPOCH) {
         return OMPI_ERR_RMA_SYNC;
     }
@@ -280,6 +282,8 @@ int ompi_osc_ucx_unlock_all(struct ompi_win_t *win) {
 //        return ret;
 //    }
 
+    DBG_OUT("ompi_osc_ucx_unlock_all: after flush, mem = %p\n", (void *)module->mem);
+
     module->global_ops_num = 0;
     memset(module->per_target_ops_nums, 0, sizeof(int) * comm_size);
 
@@ -291,6 +295,8 @@ int ompi_osc_ucx_unlock_all(struct ompi_win_t *win) {
     }
 
     module->epoch_type.access = NONE_EPOCH;
+
+    DBG_OUT("ompi_osc_ucx_unlock_all: end, mem = %p\n", (void *)module->mem);
 
     return ret;
 }
