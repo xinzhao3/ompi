@@ -1514,6 +1514,9 @@ int opal_common_ucx_mem_post(opal_common_ucx_mem_t *mem,
         return OPAL_ERROR;
     }
     DBG_OUT("opal_common_ucx_mem_post(after ucp_atomic_post): ep = %p, rkey = %p\n", (void *)ep, (void *)rkey);
+
+
+
     opal_mutex_unlock(&winfo->mutex);
 
     return OPAL_SUCCESS;

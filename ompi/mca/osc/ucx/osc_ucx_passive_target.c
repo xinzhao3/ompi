@@ -24,13 +24,6 @@ static inline int start_shared(ompi_osc_ucx_module_t *module, int target) {
 //    ucs_status_t status;
 //    int ret;
 
-/*
-    volatile int delay = 1;
-    while( delay ){
-        sleep(1);
-    }
-*/   
-
     return OMPI_SUCCESS;
 
     while (true) {
@@ -43,6 +36,7 @@ static inline int start_shared(ompi_osc_ucx_module_t *module, int target) {
 //            return ret;
 //        }
 
+        DBG_OUT("start_shared: after fadd, result_value = %d", (int)result_value);
         assert((int64_t)result_value >= 0);
         if (result_value >= TARGET_LOCK_EXCLUSIVE) {
 //            status = ucp_atomic_post(ep, UCP_ATOMIC_POST_OP_ADD, (-1), sizeof(uint64_t),
