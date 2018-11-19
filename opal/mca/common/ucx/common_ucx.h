@@ -199,6 +199,8 @@ extern __thread int initialized;
 
 #include  <unistd.h>
 #include <sys/syscall.h>
+#include <time.h>
+#include <sys/time.h>
 
 static inline void init_tls_dbg(void)
 {
@@ -207,8 +209,10 @@ static inline void init_tls_dbg(void)
         char hname[128];
         gethostname(hname, 127);
         char fname[128];
+        struct timeval start;
 
-        sprintf(fname, "%s.%d.log", hname, tid);
+        gettimeofday(&start, NULL);
+        sprintf(fname, "[%ld] %s.%d.log", (start.tv_sec * 1000000 + start.tv_usec), hname, tid);
         tls_pf = fopen(fname, "w");
         initialized = 1;
     }
