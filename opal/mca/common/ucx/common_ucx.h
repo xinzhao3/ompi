@@ -209,10 +209,8 @@ static inline void init_tls_dbg(void)
         char hname[128];
         gethostname(hname, 127);
         char fname[128];
-        struct timeval start;
 
-        gettimeofday(&start, NULL);
-        sprintf(fname, "[%ld] %s.%d.log", (start.tv_sec * 1000000 + start.tv_usec), hname, tid);
+        sprintf(fname, " %s.%d.log", hname, tid);
         tls_pf = fopen(fname, "w");
         initialized = 1;
     }
@@ -220,7 +218,10 @@ static inline void init_tls_dbg(void)
 
 #define DBG_OUT(...)                \
 {                                   \
+    struct timeval start_;           \
+    gettimeofday(&start_, NULL);     \
     init_tls_dbg();                 \
+    fprintf(tls_pf, "[%ld] ", (start_.tv_sec * 1000000 + start_.tv_usec));\
     fprintf(tls_pf, __VA_ARGS__);    \
 }
 
