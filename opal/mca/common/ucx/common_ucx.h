@@ -110,7 +110,7 @@ typedef struct {
 } opal_common_ucx_wpool_t;
 
 typedef struct {
-    opal_atomic_int32_t ctx_id;
+    int ctx_id;
     opal_mutex_t mutex;
     opal_common_ucx_wpool_t *wpool; /* which wpool this ctx belongs to */
     opal_list_t workers; /* active worker lists */
@@ -120,7 +120,7 @@ typedef struct {
 } opal_common_ucx_ctx_t;
 
 typedef struct {
-    opal_atomic_int32_t mem_id;
+    int mem_id;
     opal_mutex_t mutex;
     opal_common_ucx_ctx_t *ctx; /* which ctx this mem_reg belongs to */
     ucp_mem_h memh;
