@@ -569,12 +569,9 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
     DBG_OUT("ompi_osc_ucx_free: after mem_flush, mem = %p lock flag = %d\n",
             (void *)module->mem, (int)module->state.lock);
 
-    /*
     while (module->state.lock != TARGET_LOCK_UNLOCKED) {
-        // not sure if this is required
-        // ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+        ucp_worker_progress(mca_osc_ucx_component.wpool->recv_worker);
     }
-    */
 
     ret = module->comm->c_coll->coll_barrier(module->comm,
                                              module->comm->c_coll->coll_barrier_module);
