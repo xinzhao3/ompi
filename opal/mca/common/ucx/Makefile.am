@@ -13,7 +13,8 @@
 # Header files
 
 headers = \
-        common_ucx.h
+        common_ucx.h \
+        common_ucx_internal.h
 
 # Source files
 
