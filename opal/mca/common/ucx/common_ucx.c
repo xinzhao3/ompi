@@ -1510,7 +1510,7 @@ int opal_common_ucx_mem_post(opal_common_ucx_mem_t *mem,
                              len, rem_addr, rkey);
     if (status != UCS_OK) {
     	opal_mutex_unlock(&winfo->mutex);
-        MCA_COMMON_UCX_VERBOSE(1, "ucp_atomic_post failed: %d", status);
+        MCA_COMMON_UCX_ERROR("ucp_atomic_post failed: %d", status);
         return OPAL_ERROR;
     }
     DBG_OUT("opal_common_ucx_mem_post(after ucp_atomic_post): ep = %p, rkey = %p\n", (void *)ep, (void *)rkey);
