@@ -120,7 +120,7 @@ static int component_register(void) {
 
 static int progress_callback(void) {
     if (mca_osc_ucx_component.wpool != NULL) {
-        opal_common_ucx_workers_progress(mca_osc_ucx_component.wpool);
+        ucp_worker_progress(mca_osc_ucx_component.wpool->recv_worker);
     }
     return 0;
 }
@@ -569,9 +569,11 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
     DBG_OUT("ompi_osc_ucx_free: after mem_flush, mem = %p lock flag = %d\n",
             (void *)module->mem, (int)module->state.lock);
 
+    /*
     while (module->state.lock != TARGET_LOCK_UNLOCKED) {
         ucp_worker_progress(mca_osc_ucx_component.wpool->recv_worker);
     }
+    */
 
     ret = module->comm->c_coll->coll_barrier(module->comm,
                                              module->comm->c_coll->coll_barrier_module);
