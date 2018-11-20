@@ -1382,27 +1382,30 @@ opal_common_ucx_mem_putget(opal_common_ucx_mem_t *mem,
     switch(op){
     case OPAL_COMMON_UCX_PUT:
         status = ucp_put_nbi(ep, buffer,len, rem_addr, rkey);
+        // TODO: movethis duplicated if-else out of switch
+        // char *func = "ucp_put_nbi";
+        // verbose("... func = %s...", func);
         if (status != UCS_OK && status != UCS_INPROGRESS) {
         	MCA_COMMON_UCX_VERBOSE(1, "ucp_put_nbi failed: %d", status);
-            opal_mutex_unlock(&winfo->mutex);
-            return OPAL_ERROR;
+            rc = OPAL_ERROR;
+        } else {
+            DBG_OUT("opal_common_ucx_mem_putget(after ucp_put_nbi): ep = %p, rkey = %p\n",
+                    (void *)ep, (void *)rkey);
         }
-        DBG_OUT("opal_common_ucx_mem_putget(after ucp_put_nbi): ep = %p, rkey = %p\n",
-        	   (void *)ep, (void *)rkey);
         break;
     case OPAL_COMMON_UCX_GET:
         status = ucp_get_nbi(ep, buffer,len, rem_addr, rkey);
         if (status != UCS_OK && status != UCS_INPROGRESS) {
         	MCA_COMMON_UCX_VERBOSE(1, "ucp_get_nbi failed: %d", status);
-            opal_mutex_unlock(&winfo->mutex);
-            return OPAL_ERROR;
+            rc = OPAL_ERROR;
+        } else {
+            DBG_OUT("opal_common_ucx_mem_putget(after ucp_get_nbi): ep = %p, rkey = %p\n",
+                    (void *)ep, (void *)rkey);
         }
-        DBG_OUT("opal_common_ucx_mem_putget(after ucp_get_nbi): ep = %p, rkey = %p\n",
-        	   (void *)ep, (void *)rkey);
         break;
     }
     opal_mutex_unlock(&winfo->mutex);
-    return OPAL_SUCCESS;
+    return rc;
 }
 
 
@@ -1434,14 +1437,14 @@ int opal_common_ucx_mem_cmpswp(opal_common_ucx_mem_t *mem,
                                           winfo->worker);
     if (status != UCS_OK) {
     	MCA_COMMON_UCX_VERBOSE(1, "opal_common_ucx_atomic_cswap failed: %d", status);
-        opal_mutex_unlock(&winfo->mutex);
-        return OPAL_ERROR;
+        rc = OPAL_ERROR;
+    } else {
+        DBG_OUT("opal_common_ucx_mem_cmpswp(after opal_common_ucx_atomic_cswap): ep = %p, rkey = %p\n",
+                (void *)ep, (void *)rkey);
     }
-    DBG_OUT("opal_common_ucx_mem_cmpswp(after opal_common_ucx_atomic_cswap): ep = %p, rkey = %p\n",
-    	   (void *)ep, (void *)rkey);
-
     opal_mutex_unlock(&winfo->mutex);
-    return OPAL_SUCCESS;
+
+    return rc;
 }
 
 OPAL_DECLSPEC
@@ -1471,16 +1474,15 @@ int opal_common_ucx_mem_fetch(opal_common_ucx_mem_t *mem,
                                           rem_addr, rkey,
                                           winfo->worker);
     if (status != UCS_OK) {
-    	opal_mutex_unlock(&winfo->mutex);
     	MCA_COMMON_UCX_VERBOSE(1, "ucp_atomic_cswap64 failed: %d", status);
-        return OPAL_ERROR;
+        rc = OPAL_ERROR;
+    } else {
+        DBG_OUT("opal_common_ucx_mem_fetch(after opal_common_ucx_atomic_fetch): ep = %p, rkey = %p\n",
+                (void *)ep, (void *)rkey);
     }
-    DBG_OUT("opal_common_ucx_mem_fetch(after opal_common_ucx_atomic_fetch): ep = %p, rkey = %p\n",
-    	   (void *)ep, (void *)rkey);
-
     opal_mutex_unlock(&winfo->mutex);
 
-    return OPAL_SUCCESS;
+    return rc;
 }
 
 
@@ -1496,6 +1498,7 @@ int opal_common_ucx_mem_post(opal_common_ucx_mem_t *mem,
     ucs_status_t status;
     int rc = OPAL_SUCCESS;
 
+
     rc =_tlocal_fetch(mem, target, &ep, &rkey, &winfo);
     if(OPAL_SUCCESS != rc){
     	MCA_COMMON_UCX_VERBOSE(1, "tlocal_fetch failed: %d", rc);
@@ -1509,17 +1512,13 @@ int opal_common_ucx_mem_post(opal_common_ucx_mem_t *mem,
     status = ucp_atomic_post(ep, opcode, value,
                              len, rem_addr, rkey);
     if (status != UCS_OK) {
-    	opal_mutex_unlock(&winfo->mutex);
         MCA_COMMON_UCX_ERROR("ucp_atomic_post failed: %d", status);
-        return OPAL_ERROR;
+        rc = OPAL_ERROR;
+    } else {
+        DBG_OUT("opal_common_ucx_mem_post(after ucp_atomic_post): ep = %p, rkey = %p\n", (void *)ep, (void *)rkey);
     }
-    DBG_OUT("opal_common_ucx_mem_post(after ucp_atomic_post): ep = %p, rkey = %p\n", (void *)ep, (void *)rkey);
-
-
-
     opal_mutex_unlock(&winfo->mutex);
-
-    return OPAL_SUCCESS;
+    return rc;
 }
 
 OPAL_DECLSPEC int
@@ -1533,6 +1532,7 @@ opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
 
     DBG_OUT("opal_common_ucx_mem_flush: mem = %p, target = %d\n", (void *)mem, target);
 
+    // TODO: make this as a read lock
     opal_mutex_lock(&ctx->mutex);
     OPAL_LIST_FOREACH(item, &ctx->workers, _worker_list_item_t) {
         switch (scope) {
@@ -1540,10 +1540,8 @@ opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
             opal_mutex_lock(&item->ptr->winfo->mutex);
             rc = opal_common_ucx_worker_flush(item->ptr->winfo->worker);
             if (rc != OPAL_SUCCESS) {
-            	opal_mutex_unlock(&item->ptr->winfo->mutex);
-            	opal_mutex_unlock(&ctx->mutex);
                 MCA_COMMON_UCX_VERBOSE(1, "opal_common_ucx_worker_flush failed: %d", rc);
-                return OPAL_ERROR;
+                rc = OPAL_ERROR;
             }
             DBG_OUT("opal_common_ucx_mem_flush(after opal_common_ucx_worker_flush): worker = %p\n",
             		(void *)item->ptr->winfo->worker);
@@ -1555,10 +1553,8 @@ opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
                 rc = opal_common_ucx_ep_flush(item->ptr->winfo->endpoints[target],
                                               item->ptr->winfo->worker);
                 if (rc != OPAL_SUCCESS) {
-                	opal_mutex_unlock(&item->ptr->winfo->mutex);
-                	opal_mutex_unlock(&ctx->mutex);
                     MCA_COMMON_UCX_VERBOSE(1, "opal_common_ucx_ep_flush failed: %d", rc);
-                    return OPAL_ERROR;
+                    rc = OPAL_ERROR;
                 }
                 DBG_OUT("opal_common_ucx_mem_flush(after opal_common_ucx_worker_flush): ep = %p worker = %p\n",
                 		(void *)item->ptr->winfo->endpoints[target],
