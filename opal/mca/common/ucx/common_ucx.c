@@ -328,11 +328,11 @@ static inline void _cleanup_tlocal(void *arg)
     OPAL_LIST_FOREACH_SAFE(item, next, &wpool->tls_list, _tlocal_table_t) {
         if (item == tls) {
             opal_list_remove_item(&wpool->tls_list, &item->super);
-            _common_ucx_tls_cleanup(tls);
             break;
         }
     }
     opal_mutex_unlock(&wpool->mutex);
+    _common_ucx_tls_cleanup(tls);
 }
 
 static
