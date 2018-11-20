@@ -98,13 +98,23 @@ typedef struct opal_common_ucx_del_proc {
 extern opal_common_ucx_module_t opal_common_ucx;
 
 typedef struct {
+
+    /* Ref counting & locking*/
     int refcnt;
-    ucp_context_h ucp_ctx;
     opal_mutex_t mutex;
-    opal_list_t idle_workers;
+
+    /* UCX data */
+    ucp_context_h ucp_ctx;
     ucp_worker_h recv_worker;
     ucp_address_t *recv_waddr;
     size_t recv_waddr_len;
+
+    /* Thread-local key to allow each thread to have
+     * local information assisiated with this wpool */
+    pthread_key_t tls_key;
+
+    /* Bookkeeping information */
+    opal_list_t idle_workers;
     opal_atomic_int32_t cur_ctxid, cur_memid;
     opal_list_t tls_list;
 } opal_common_ucx_wpool_t;

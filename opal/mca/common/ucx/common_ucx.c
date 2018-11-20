@@ -227,7 +227,7 @@ OBJ_CLASS_INSTANCE(_worker_list_item_t, opal_list_item_t, NULL, NULL);
 OBJ_CLASS_INSTANCE(_mem_region_list_item_t, opal_list_item_t, NULL, NULL);
 OBJ_CLASS_INSTANCE(_tlocal_table_t, opal_list_item_t, NULL, NULL);
 
-static pthread_key_t _tlocal_key = {0};
+//static pthread_key_t _tlocal_key = {0};
 
 #ifdef FDBG
 __thread FILE *tls_pf = NULL;
@@ -334,7 +334,7 @@ int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
         goto err_wpool_add;
     }
 
-    pthread_key_create(&_tlocal_key, _cleanup_tlocal);
+    pthread_key_create(&wpool->tls_key, _cleanup_tlocal);
 
     DBG_OUT("opal_common_ucx_wpool_init: wpool = %p\n", (void *)wpool);
     return rc;
@@ -364,7 +364,7 @@ void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
         return;
     }
 
-    pthread_key_delete(_tlocal_key);
+    pthread_key_delete(wpool->tls_key);
 
     opal_mutex_lock(&wpool->mutex);
     OPAL_LIST_FOREACH_SAFE(tls_item, tls_next, &wpool->tls_list, _tlocal_table_t) {
@@ -815,14 +815,14 @@ static _tlocal_table_t* _common_ucx_tls_init(opal_common_ucx_wpool_t *wpool)
         // TODO: handle error
     }
 
-    pthread_setspecific(_tlocal_key, tls);
+    pthread_setspecific(wpool->tls_key, tls);
     DBG_OUT("_common_ucx_tls_init(end): wpool = %p\n", (void *)wpool);
     return tls;
 }
 
 static inline _tlocal_table_t *
 _tlocal_get_tls(opal_common_ucx_wpool_t *wpool){
-    _tlocal_table_t *tls = pthread_getspecific(_tlocal_key);
+    _tlocal_table_t *tls = pthread_getspecific(wpool->tls_key);
     if( OPAL_UNLIKELY(NULL == tls) ) {
         tls = _common_ucx_tls_init(wpool);
     }
@@ -857,7 +857,7 @@ static void _common_ucx_tls_cleanup(_tlocal_table_t *tls)
         free(tls->ctx_tbl[i]);
     }
 
-    pthread_setspecific(_tlocal_key, NULL);
+    pthread_setspecific(tls->wpool->tls_key, NULL);
     DBG_OUT("_common_ucx_tls_cleanup(end): tls = %p\n", (void *)tls);
 
     OBJ_RELEASE(tls);
