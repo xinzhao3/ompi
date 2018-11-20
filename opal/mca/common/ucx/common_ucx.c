@@ -588,7 +588,7 @@ int opal_common_ucx_ctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
     opal_common_ucx_ctx_t *ctx = calloc(1, sizeof(*ctx));
     int ret = OPAL_SUCCESS;
 
-    OPAL_ATOMIC_ADD_FETCH32(&ctx->ctx_id, 1);
+    ctx->ctx_id = OPAL_ATOMIC_ADD_FETCH32(&wpool->cur_ctxid, 1);
     DBG_OUT("ctx_create: ctx_id = %d\n", (int)ctx->ctx_id);
 
     OBJ_CONSTRUCT(&ctx->mutex, opal_mutex_t);
@@ -746,7 +746,8 @@ int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int comm_size,
     ucs_status_t status;
     int ret = OPAL_SUCCESS;
 
-    OPAL_ATOMIC_ADD_FETCH32(&mem->mem_id, 1);
+    mem->mem_id = OPAL_ATOMIC_ADD_FETCH32(&ctx->wpool->cur_memid, 1);
+
     DBG_OUT("mem_create: mem_id = %d\n", (int)mem->mem_id);
 
     OBJ_CONSTRUCT(&mem->mutex, opal_mutex_t);
@@ -935,8 +936,6 @@ static void _common_ucx_tls_cleanup(_tlocal_table_t *tls)
     return;
 }
 
-
-
 static int
 _tlocal_tls_get_worker(_tlocal_table_t *tls, _worker_info_t **_winfo)
 {
@@ -1052,7 +1051,7 @@ _tlocal_add_ctx(_tlocal_table_t *tls, opal_common_ucx_ctx_t *ctx)
         }
     }
 
-    if( tls->ctx_tbl_size >= i ){
+    if( i >= tls->ctx_tbl_size ){
         i = tls->ctx_tbl_size;
         rc = _tlocal_tls_ctxtbl_extend(tls, 4);
         if (rc) {
@@ -1060,6 +1059,7 @@ _tlocal_add_ctx(_tlocal_table_t *tls, opal_common_ucx_ctx_t *ctx)
             return NULL;
         }
     }
+
     tls->ctx_tbl[i]->ctx_id = ctx->ctx_id;
     tls->ctx_tbl[i]->gctx = ctx;
     rc = _tlocal_tls_get_worker(tls, &tls->ctx_tbl[i]->winfo);
@@ -1214,7 +1214,7 @@ static _tlocal_mem_t *_tlocal_add_mem(_tlocal_table_t *tls,
         }
     }
 
-    if( tls->mem_tbl_size >= i ){
+    if( i >= tls->mem_tbl_size ){
         i = tls->mem_tbl_size;
         rc = _tlocal_tls_memtbl_extend(tls, 4);
         if (rc != OPAL_SUCCESS) {
