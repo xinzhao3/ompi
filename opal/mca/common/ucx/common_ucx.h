@@ -280,7 +280,7 @@ typedef struct {
 
 typedef struct  {
     opal_mutex_t mutex;
-    int released;
+    volatile int released;
     ucp_worker_h worker;
     ucp_ep_h *endpoints;
     size_t comm_size;

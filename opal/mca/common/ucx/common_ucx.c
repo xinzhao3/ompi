@@ -616,8 +616,21 @@ error:
 OPAL_DECLSPEC void
 opal_common_ucx_ctx_release(opal_common_ucx_ctx_t *ctx)
 {
-    // TODO: implement
+    _ctx_record_list_item_t *item = NULL, *next;
     DBG_OUT("opal_common_ucx_ctx_release: ctx = %p\n", (void *)ctx);
+
+    /* Mark all the contexts and workers as being released
+     * Threads involved in this context will reconize this
+     * through the "released" flag and will perform cleanup
+     * in a deferred manner.
+     * If Worker pool will be destroyed earlier - wpool filalize
+     * will take care of this.
+     */
+    opal_mutex_lock(&ctx->mutex);
+    OPAL_LIST_FOREACH(item, &ctx->tls_workers, _ctx_record_list_item_t) {
+        item->ptr->released = 1;
+    }
+    opal_mutex_unlock(&ctx->mutex);
     _tlocal_ctx_release(ctx);
 }
 
@@ -1126,7 +1139,7 @@ _tlocal_add_ctx(_tlocal_table_t *tls, opal_common_ucx_ctx_t *ctx)
             /* Found clean record */
             break;
         }
-        if (tls->ctx_tbl[i]->is_freed ) {
+        if (tls->ctx_tbl[i]->released ) {
             /* Found dirty record, need to clean first */
             _tlocal_ctx_record_cleanup(tls->ctx_tbl[i]);
             break;
@@ -1227,7 +1240,7 @@ _tlocal_ctx_release(opal_common_ucx_ctx_t *ctx)
     opal_mutex_unlock(&winfo->mutex);
 
     ctx_rec->ctx_id = 0;
-    ctx_rec->is_freed = 0;
+    ctx_rec->released = 0;
     ctx_rec->gctx = NULL;
     ctx_rec->winfo = NULL;
 
@@ -1254,8 +1267,8 @@ _tlocal_mem_record_cleanup(_tlocal_mem_t *mem_rec)
 {
     size_t i;
     DBG_OUT("_tlocal_mem_record_cleanup: record=%p, is_freed = %d\n",
-            (void *)mem_rec, mem_rec->is_freed);
-    if (mem_rec->is_freed) {
+            (void *)mem_rec, mem_rec->released);
+    if (mem_rec->released) {
         return;
     }
     /* Remove myself from the memory context structure
@@ -1298,7 +1311,7 @@ static _tlocal_mem_t *_tlocal_add_mem(_tlocal_table_t *tls,
         if (0 == tls->mem_tbl[i]->mem_id) {
             /* Found a clear record */
         }
-        if (tls->mem_tbl[i]->is_freed) {
+        if (tls->mem_tbl[i]->released) {
             /* Found a dirty record. Need to clean it first */
             _tlocal_mem_record_cleanup(tls->mem_tbl[i]);
             DBG_OUT("_tlocal_add_mem(after _tlocal_mem_record_cleanup): tls = %p mem_tbl_entry = %p\n",
@@ -1319,7 +1332,7 @@ static _tlocal_mem_t *_tlocal_add_mem(_tlocal_table_t *tls,
     }
     tls->mem_tbl[i]->mem_id = mem->mem_id;
     tls->mem_tbl[i]->gmem = mem;
-    tls->mem_tbl[i]->is_freed = 0;
+    tls->mem_tbl[i]->released = 0;
     tls->mem_tbl[i]->mem = calloc(1, sizeof(*tls->mem_tbl[i]->mem));
     ctx_rec = _tlocal_ctx_search(tls, mem->ctx->ctx_id);
     if (NULL == ctx_rec) {
