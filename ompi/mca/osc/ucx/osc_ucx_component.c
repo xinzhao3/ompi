@@ -297,7 +297,7 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
         }
     }
 
-    ret = opal_common_ucx_ctx_create(mca_osc_ucx_component.wpool, comm_size,
+    ret = opal_common_ucx_wpctx_create(mca_osc_ucx_component.wpool, comm_size,
                                      &exchange_len_info, (void *)module->comm,
                                      &module->ctx);
     if (OMPI_SUCCESS != ret) {
@@ -314,7 +314,7 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
             break;
         }
 
-        ret = opal_common_ucx_mem_create(module->ctx, base, size,
+        ret = opal_common_ucx_wpmem_create(module->ctx, base, size,
                                          mem_type, &exchange_len_info,
                                          (void *)module->comm, &module->mem);
         if (ret != OMPI_SUCCESS) {
@@ -324,7 +324,7 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
     }
 
     state_base = (void *)&(module->state);
-    ret = opal_common_ucx_mem_create(module->ctx, &state_base,
+    ret = opal_common_ucx_wpmem_create(module->ctx, &state_base,
                                      sizeof(ompi_osc_ucx_state_t),
                                      OPAL_COMMON_UCX_MEM_MAP, &exchange_len_info,
                                      (void *)module->comm, &module->state_mem);

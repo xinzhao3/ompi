@@ -114,8 +114,8 @@ typedef struct ompi_osc_ucx_module {
     int *start_grp_ranks;
     bool lock_all_is_nocheck;
     opal_common_ucx_ctx_t *ctx;
-    opal_common_ucx_mem_t *mem;
-    opal_common_ucx_mem_t *state_mem;
+    opal_common_ucx_wpmem_t *mem;
+    opal_common_ucx_wpmem_t *state_mem;
 } ompi_osc_ucx_module_t;
 
 typedef enum locktype {

@@ -250,6 +250,7 @@ typedef struct {
      * we need to keep track of them to have an ability to
      * let thread know that this context is no longer valid */
     opal_list_t tls_workers;
+    volatile int released;
 
     /* UCX addressing information */
     char *recv_worker_addrs;
@@ -271,12 +272,13 @@ typedef struct {
     /* list of TLS components that become
      * assosiated with this mem region */
     opal_list_t registrations;
+    volatile int released;
 
     /* TLS item that allows each thread to
      * store endpoints and rkey arrays
      * for faster access */
     pthread_key_t mem_tls_key;
-} opal_common_ucx_mem_t;
+} opal_common_ucx_wpmem_t;
 
 typedef struct  {
     opal_mutex_t mutex;
@@ -365,16 +367,16 @@ OPAL_DECLSPEC void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool
 OPAL_DECLSPEC void opal_common_ucx_wpool_progress(opal_common_ucx_wpool_t *wpool);
 
 /* Manage Communication context */
-OPAL_DECLSPEC int opal_common_ucx_ctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
+OPAL_DECLSPEC int opal_common_ucx_wpctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
                                              opal_common_ucx_exchange_func_t exchange_func,
                                              void *exchange_metadata,
                                              opal_common_ucx_ctx_t **ctx_ptr);
-OPAL_DECLSPEC void opal_common_ucx_ctx_release(opal_common_ucx_ctx_t *ctx);
+OPAL_DECLSPEC void opal_common_ucx_wpctx_release(opal_common_ucx_ctx_t *ctx);
 
 /* Managing thread local storage */
-OPAL_DECLSPEC int opal_common_ucx_tlocal_fetch_spath(opal_common_ucx_mem_t *mem, int target);
+OPAL_DECLSPEC int opal_common_ucx_tlocal_fetch_spath(opal_common_ucx_wpmem_t *mem, int target);
 static inline int
-opal_common_ucx_tlocal_fetch(opal_common_ucx_mem_t *mem, int target,
+opal_common_ucx_tlocal_fetch(opal_common_ucx_wpmem_t *mem, int target,
                                 ucp_ep_h *_ep, ucp_rkey_h *_rkey,
                                 opal_common_ucx_winfo_t **_winfo)
 {
@@ -404,20 +406,21 @@ opal_common_ucx_tlocal_fetch(opal_common_ucx_mem_t *mem, int target,
 }
 
 /* Manage & operations on the Memory registrations */
-OPAL_DECLSPEC int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx,
+OPAL_DECLSPEC int opal_common_ucx_wpmem_create(opal_common_ucx_ctx_t *ctx,
                                void **mem_base, size_t mem_size,
                                opal_common_ucx_mem_type_t mem_type,
                                opal_common_ucx_exchange_func_t exchange_func,
                                void *exchange_metadata,
-                               opal_common_ucx_mem_t **mem_ptr);
+                               opal_common_ucx_wpmem_t **mem_ptr);
+OPAL_DECLSPEC int opal_common_ucx_wpmem_free(opal_common_ucx_wpmem_t *mem);
 
-OPAL_DECLSPEC int opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
+OPAL_DECLSPEC int opal_common_ucx_mem_flush(opal_common_ucx_wpmem_t *mem,
                                             opal_common_ucx_flush_scope_t scope,
                                             int target);
 
 
 static inline int
-opal_common_ucx_mem_putget(opal_common_ucx_mem_t *mem, opal_common_ucx_op_t op,
+opal_common_ucx_mem_putget(opal_common_ucx_wpmem_t *mem, opal_common_ucx_op_t op,
                            int target, void *buffer, size_t len,
                            uint64_t rem_addr)
 {
@@ -468,7 +471,7 @@ opal_common_ucx_mem_putget(opal_common_ucx_mem_t *mem, opal_common_ucx_op_t op,
 
 
 static inline int
-opal_common_ucx_mem_cmpswp(opal_common_ucx_mem_t *mem, uint64_t compare,
+opal_common_ucx_mem_cmpswp(opal_common_ucx_wpmem_t *mem, uint64_t compare,
                            uint64_t value, int target, void *buffer, size_t len,
                            uint64_t rem_addr)
 {
@@ -505,7 +508,7 @@ opal_common_ucx_mem_cmpswp(opal_common_ucx_mem_t *mem, uint64_t compare,
 }
 
 static inline int
-opal_common_ucx_mem_fetch(opal_common_ucx_mem_t *mem, ucp_atomic_fetch_op_t opcode,
+opal_common_ucx_mem_fetch(opal_common_ucx_wpmem_t *mem, ucp_atomic_fetch_op_t opcode,
                           uint64_t value,int target, void *buffer, size_t len,
                           uint64_t rem_addr)
 {
@@ -542,7 +545,7 @@ opal_common_ucx_mem_fetch(opal_common_ucx_mem_t *mem, ucp_atomic_fetch_op_t opco
 }
 
 static inline int
-opal_common_ucx_mem_post(opal_common_ucx_mem_t *mem, ucp_atomic_post_op_t opcode,
+opal_common_ucx_mem_post(opal_common_ucx_wpmem_t *mem, ucp_atomic_post_op_t opcode,
                          uint64_t value, int target, size_t len, uint64_t rem_addr)
 {
     ucp_ep_h ep;
