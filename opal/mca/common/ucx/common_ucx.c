@@ -825,6 +825,7 @@ opal_common_ucx_wpmem_free(opal_common_ucx_wpmem_t *mem)
     if (can_free) {
         _common_ucx_wpmem_free(mem);
     }
+    return OPAL_SUCCESS;
 }
 
 
@@ -1425,7 +1426,7 @@ OPAL_DECLSPEC int opal_common_ucx_tlocal_fetch_spath(opal_common_ucx_wpmem_t *me
 }
 
 OPAL_DECLSPEC int
-opal_common_ucx_mem_flush(opal_common_ucx_wpmem_t *mem,
+opal_common_ucx_wpmem_flush(opal_common_ucx_wpmem_t *mem,
                           opal_common_ucx_flush_scope_t scope,
                           int target)
 {
@@ -1472,7 +1473,7 @@ opal_common_ucx_mem_flush(opal_common_ucx_wpmem_t *mem,
 }
 
 OPAL_DECLSPEC int
-opal_common_ucx_mem_fence(opal_common_ucx_mem_t *mem) {
+opal_common_ucx_wpmem_fence(opal_common_ucx_wpmem_t *mem) {
     /* TODO */
     return OPAL_SUCCESS;
 }
