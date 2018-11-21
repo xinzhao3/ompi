@@ -105,7 +105,7 @@ typedef struct {
     ucp_worker_h recv_worker;
     ucp_address_t *recv_waddr;
     size_t recv_waddr_len;
-    int cur_ctxid, cur_memid;
+    opal_atomic_int32_t cur_ctxid, cur_memid;
     opal_list_t tls_list;
 } opal_common_ucx_wpool_t;
 
@@ -169,6 +169,12 @@ OPAL_DECLSPEC int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int com
 OPAL_DECLSPEC int opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
                                             opal_common_ucx_flush_scope_t scope,
                                             int target);
+OPAL_DECLSPEC int opal_common_ucx_mem_fetch_nb(opal_common_ucx_mem_t *mem,
+                                               ucp_atomic_fetch_op_t opcode,
+                                               uint64_t value,
+                                               int target, void *buffer, size_t len,
+                                               uint64_t rem_addr, ucs_status_ptr_t *ptr);
+OPAL_DECLSPEC int opal_common_ucx_mem_fence(opal_common_ucx_mem_t *mem);
 OPAL_DECLSPEC int opal_common_ucx_workers_progress(opal_common_ucx_wpool_t *wpool);
 OPAL_DECLSPEC int opal_common_ucx_mem_cmpswp(opal_common_ucx_mem_t *mem,
                                              uint64_t compare, uint64_t value,
@@ -305,6 +311,16 @@ int opal_common_ucx_worker_flush(ucp_worker_h worker)
 }
 
 static inline
+ucs_status_ptr_t opal_common_ucx_atomic_fetch_nb(ucp_ep_h ep, ucp_atomic_fetch_op_t opcode,
+                                                 uint64_t value, void *result, size_t op_size,
+                                                 uint64_t remote_addr, ucp_rkey_h rkey,
+                                                 ucp_worker_h worker)
+{
+    return ucp_atomic_fetch_nb(ep, opcode, value, result, op_size,
+                               remote_addr, rkey, opal_common_ucx_empty_complete_cb);
+}
+
+static inline
 int opal_common_ucx_atomic_fetch(ucp_ep_h ep, ucp_atomic_fetch_op_t opcode,
                                  uint64_t value, void *result, size_t op_size,
                                  uint64_t remote_addr, ucp_rkey_h rkey,
@@ -312,8 +328,8 @@ int opal_common_ucx_atomic_fetch(ucp_ep_h ep, ucp_atomic_fetch_op_t opcode,
 {
     ucs_status_ptr_t request;
 
-    request = ucp_atomic_fetch_nb(ep, opcode, value, result, op_size,
-                                  remote_addr, rkey, opal_common_ucx_empty_complete_cb);
+    request = opal_common_ucx_atomic_fetch_nb(ep, opcode, value, result, op_size,
+                                              remote_addr, rkey, worker);
     return opal_common_ucx_wait_request(request, worker, "ucp_atomic_fetch_nb");
 }
 

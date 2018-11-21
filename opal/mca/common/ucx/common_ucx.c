@@ -1474,12 +1474,41 @@ int opal_common_ucx_mem_fetch(opal_common_ucx_mem_t *mem,
                                           rem_addr, rkey,
                                           winfo->worker);
     if (status != UCS_OK) {
-    	MCA_COMMON_UCX_VERBOSE(1, "ucp_atomic_cswap64 failed: %d", status);
+        MCA_COMMON_UCX_VERBOSE(1, "opal_common_ucx_atomic_fetch failed: %d", status);
         rc = OPAL_ERROR;
     } else {
         DBG_OUT("opal_common_ucx_mem_fetch(after opal_common_ucx_atomic_fetch): ep = %p, rkey = %p\n",
                 (void *)ep, (void *)rkey);
     }
+    opal_mutex_unlock(&winfo->mutex);
+
+    return rc;
+}
+
+OPAL_DECLSPEC
+int opal_common_ucx_mem_fetch_nb(opal_common_ucx_mem_t *mem,
+                                 ucp_atomic_fetch_op_t opcode,
+                                 uint64_t value,
+                                 int target, void *buffer, size_t len,
+                                 uint64_t rem_addr, ucs_status_ptr_t *ptr)
+{
+    ucp_ep_h ep = NULL;
+    ucp_rkey_h rkey = NULL;
+    _worker_info_t *winfo = NULL;
+    int rc = OPAL_SUCCESS;
+
+    rc =_tlocal_fetch(mem, target, &ep, &rkey, &winfo);
+    if(OPAL_SUCCESS != rc){
+        MCA_COMMON_UCX_VERBOSE(1, "tlocal_fetch failed: %d", rc);
+        return rc;
+    }
+
+    /* Perform the operation */
+    opal_mutex_lock(&winfo->mutex);
+    (*ptr) = opal_common_ucx_atomic_fetch_nb(ep, opcode, value,
+                                             buffer, len,
+                                             rem_addr, rkey,
+                                             winfo->worker);
     opal_mutex_unlock(&winfo->mutex);
 
     return rc;
@@ -1580,3 +1609,9 @@ int opal_common_ucx_workers_progress(opal_common_ucx_wpool_t *wpool) {
     return OPAL_SUCCESS;
 }
 
+
+OPAL_DECLSPEC int
+opal_common_ucx_mem_fence(opal_common_ucx_mem_t *mem) {
+    /* TODO */
+    return OPAL_SUCCESS;
+}
