@@ -236,13 +236,13 @@ __thread int initialized = 0;
 
 /* Worker information (winfo) management functions */
 
-static _worker_info_t *
+static opal_common_ucx_winfo_t *
 _winfo_create(opal_common_ucx_wpool_t *wpool)
 {
     ucp_worker_params_t worker_params;
     ucp_worker_h worker;
     ucs_status_t status;
-    _worker_info_t *winfo = NULL;
+    opal_common_ucx_winfo_t *winfo = NULL;
 
     memset(&worker_params, 0, sizeof(worker_params));
     worker_params.field_mask = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
@@ -273,7 +273,7 @@ exit:
     return winfo;
 }
 
-static void _winfo_reset(_worker_info_t *winfo)
+static void _winfo_reset(opal_common_ucx_winfo_t *winfo)
 {
     if(winfo->comm_size != 0) {
         size_t i;
@@ -290,7 +290,7 @@ static void _winfo_reset(_worker_info_t *winfo)
 }
 
 static void
-_winfo_release(_worker_info_t *winfo)
+_winfo_release(opal_common_ucx_winfo_t *winfo)
 {
     DBG_OUT("_release_ctx_worker: winfo = %p, worker = %p\n",
             (void*)winfo, (void *)winfo->worker);
@@ -331,7 +331,7 @@ int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
 {
     ucp_config_t *config = NULL;
     ucp_params_t context_params;
-    _worker_info_t *winfo;
+    opal_common_ucx_winfo_t *winfo;
     ucs_status_t status;
     int rc = OPAL_SUCCESS;
 
@@ -397,7 +397,7 @@ int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
         goto err_wpool_add;
     }
 
-    pthread_key_create(&wpool->tls_key, _cleanup_tlocal);
+    pthread_key_create(&wpool->tls_key, _tlocal_cleanup);
 
     DBG_OUT("opal_common_ucx_wpool_init: wpool = %p\n", (void *)wpool);
     return rc;
@@ -448,6 +448,7 @@ void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
         _winfo_list_item_t *item, *next;
         OPAL_LIST_FOREACH_SAFE(item, next, &wpool->idle_workers, _winfo_list_item_t) {
             opal_list_remove_item(&wpool->idle_workers, &item->super);
+            // _winfo_reset(item->ptr); - should be already reset
             _winfo_release(item->ptr);
             OBJ_RELEASE(item);
         }
@@ -460,6 +461,7 @@ void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
         _winfo_list_item_t *item, *next;
         OPAL_LIST_FOREACH_SAFE(item, next, &wpool->active_workers, _winfo_list_item_t) {
             opal_list_remove_item(&wpool->active_workers, &item->super);
+            _winfo_reset(item->ptr);
             _winfo_release(item->ptr);
             OBJ_RELEASE(item);
         }
@@ -484,7 +486,7 @@ opal_common_ucx_wpool_progress(opal_common_ucx_wpool_t *wpool)
     opal_mutex_lock(&wpool->mutex);
     OPAL_LIST_FOREACH_SAFE(item, next, &wpool->active_workers,
                            _winfo_list_item_t) {
-        _worker_info_t *winfo = item->ptr;
+        opal_common_ucx_winfo_t *winfo = item->ptr;
         opal_mutex_lock(&winfo->mutex);
         if( OPAL_UNLIKELY(winfo->released) ) {
             /* Do garbage collection of worker info's if needed */
@@ -503,7 +505,7 @@ opal_common_ucx_wpool_progress(opal_common_ucx_wpool_t *wpool)
 
 static int
 _wpool_list_put(opal_common_ucx_wpool_t *wpool, opal_list_t *list,
-                _worker_info_t *winfo)
+                opal_common_ucx_winfo_t *winfo)
 {
     _winfo_list_item_t *item;
 
@@ -523,10 +525,10 @@ _wpool_list_put(opal_common_ucx_wpool_t *wpool, opal_list_t *list,
     return OPAL_SUCCESS;
 }
 
-static _worker_info_t*
+static opal_common_ucx_winfo_t*
 _wpool_list_get(opal_common_ucx_wpool_t *wpool, opal_list_t *list)
 {
-    _worker_info_t *winfo = NULL;
+    opal_common_ucx_winfo_t *winfo = NULL;
     _winfo_list_item_t *item = NULL;
 
     opal_mutex_lock(&wpool->mutex);
@@ -545,10 +547,10 @@ _wpool_list_get(opal_common_ucx_wpool_t *wpool, opal_list_t *list)
     return winfo;
 }
 
-static _worker_info_t *
+static opal_common_ucx_winfo_t *
 _wpool_get_idle(opal_common_ucx_wpool_t *wpool, size_t comm_size)
 {
-    _worker_info_t *winfo;
+    opal_common_ucx_winfo_t *winfo;
     winfo = _wpool_list_get(wpool, &wpool->idle_workers);
     if (!winfo) {
         winfo = _winfo_create(wpool);
@@ -566,13 +568,14 @@ _wpool_get_idle(opal_common_ucx_wpool_t *wpool, size_t comm_size)
 }
 
 static int
-_wpool_add_active(opal_common_ucx_wpool_t *wpool, _worker_info_t *winfo)
+_wpool_add_active(opal_common_ucx_wpool_t *wpool, opal_common_ucx_winfo_t *winfo)
 {
     return _wpool_list_put(wpool, &wpool->active_workers, winfo);
 }
 
 
 /* Communication context management */
+
 OPAL_DECLSPEC
 int opal_common_ucx_ctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
                                opal_common_ucx_exchange_func_t exchange_func,
@@ -586,7 +589,7 @@ int opal_common_ucx_ctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
     DBG_OUT("ctx_create: ctx_id = %d\n", (int)ctx->ctx_id);
 
     OBJ_CONSTRUCT(&ctx->mutex, opal_mutex_t);
-    OBJ_CONSTRUCT(&ctx->workers, opal_list_t);
+    OBJ_CONSTRUCT(&ctx->tls_workers, opal_list_t);
     ctx->wpool = wpool;
     ctx->comm_size = comm_size;
 
@@ -602,10 +605,9 @@ int opal_common_ucx_ctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
     (*ctx_ptr) = ctx;
     DBG_OUT("opal_common_ucx_ctx_create: wpool = %p, (*ctx_ptr) = %p\n", (void *)wpool, (void *)(*ctx_ptr));
     return ret;
-
- error:
+error:
     OBJ_DESTRUCT(&ctx->mutex);
-    OBJ_DESTRUCT(&ctx->workers);
+    OBJ_DESTRUCT(&ctx->tls_workers);
     free(ctx);
     (*ctx_ptr) = NULL;
     return ret;
@@ -625,7 +627,7 @@ static void _common_ucx_ctx_free(opal_common_ucx_ctx_t *ctx)
     free(ctx->recv_worker_addrs);
     free(ctx->recv_worker_displs);
     OBJ_DESTRUCT(&ctx->mutex);
-    OBJ_DESTRUCT(&ctx->workers);
+    OBJ_DESTRUCT(&ctx->tls_workers);
     DBG_OUT("_common_ucx_ctx_free: ctx = %p\n", (void *)ctx);
     free(ctx);
 }
@@ -639,7 +641,7 @@ _common_ucx_ctx_append(opal_common_ucx_ctx_t *ctx, _tlocal_ctx_t *ctx_rec)
     }
     item->ptr = ctx_rec;
     opal_mutex_lock(&ctx->mutex);
-    opal_list_append(&ctx->workers, &item->super);
+    opal_list_append(&ctx->tls_workers, &item->super);
     opal_mutex_unlock(&ctx->mutex);
     DBG_OUT("_common_ucx_ctx_append: ctx = %p, ctx_rec = %p\n", (void *)ctx, (void *)ctx_rec);
     return OPAL_SUCCESS;
@@ -652,14 +654,14 @@ _common_ucx_ctx_remove(opal_common_ucx_ctx_t *ctx, _tlocal_ctx_t *ctx_rec)
     _ctx_record_list_item_t *item = NULL, *next;
 
     opal_mutex_lock(&ctx->mutex);
-    OPAL_LIST_FOREACH_SAFE(item, next, &ctx->workers, _ctx_record_list_item_t) {
+    OPAL_LIST_FOREACH_SAFE(item, next, &ctx->tls_workers, _ctx_record_list_item_t) {
         if (ctx_rec == item->ptr) {
-            opal_list_remove_item(&ctx->workers, &item->super);
+            opal_list_remove_item(&ctx->tls_workers, &item->super);
             OBJ_RELEASE(item);
             break;
         }
     }
-    if (0 == opal_list_get_size(&ctx->workers)) {
+    if (0 == opal_list_get_size(&ctx->tls_workers)) {
         can_free = 1;
     }
     opal_mutex_unlock(&ctx->mutex);
@@ -728,7 +730,7 @@ static int _comm_ucx_mem_map(opal_common_ucx_wpool_t *wpool,
 
 
 OPAL_DECLSPEC
-int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int comm_size,
+int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx,
                                void **mem_base, size_t mem_size,
                                opal_common_ucx_mem_type_t mem_type,
                                opal_common_ucx_exchange_func_t exchange_func,
@@ -779,6 +781,81 @@ int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int comm_size,
         goto error_rkey_pack;
     }
 
+    /* Dont need the destructor here, will use
+     * wpool-level destructor */
+    pthread_key_create(&mem->mem_tls_key, NULL);
+
+    (*mem_ptr) = mem;
+
+    DBG_OUT("opal_common_ucx_mem_create(end): mem = %p\n", (void *)mem);
+    return ret;
+
+ error_rkey_pack:
+    ucp_mem_unmap(ctx->wpool->ucp_ctx, mem->memh);
+ error_mem_map:
+    OBJ_DESTRUCT(&mem->mutex);
+    OBJ_DESTRUCT(&mem->registrations);
+    free(mem);
+    (*mem_ptr) = NULL;
+    return ret;
+}
+
+OPAL_DECLSPEC
+int opal_common_ucx_mem_free(opal_common_ucx_ctx_t *ctx,
+                               void **mem_base, size_t mem_size,
+                               opal_common_ucx_mem_type_t mem_type,
+                               opal_common_ucx_exchange_func_t exchange_func,
+                               void *exchange_metadata,
+                               opal_common_ucx_mem_t **mem_ptr)
+{
+    opal_common_ucx_mem_t *mem = calloc(1, sizeof(*mem));
+    void *rkey_addr = NULL;
+    size_t rkey_addr_len;
+    ucs_status_t status;
+    int ret = OPAL_SUCCESS;
+
+    mem->mem_id = OPAL_ATOMIC_ADD_FETCH32(&ctx->wpool->cur_memid, 1);
+
+    DBG_OUT("mem_create: mem_id = %d\n", (int)mem->mem_id);
+
+    OBJ_CONSTRUCT(&mem->mutex, opal_mutex_t);
+    OBJ_CONSTRUCT(&mem->registrations, opal_list_t);
+    mem->ctx = ctx;
+    mem->mem_addrs = NULL;
+    mem->mem_displs = NULL;
+
+    ret = _comm_ucx_mem_map(ctx->wpool, mem_base, mem_size, &mem->memh, mem_type);
+    if (ret != OPAL_SUCCESS) {
+        MCA_COMMON_UCX_VERBOSE(1, "_comm_ucx_mem_map failed: %d", ret);
+        goto error_mem_map;
+    }
+    DBG_OUT("opal_common_ucx_mem_create(after _comm_ucx_mem_map): base = %p, memh = %p\n",
+            (void *)(*mem_base), (void *)(mem->memh));
+
+    status = ucp_rkey_pack(ctx->wpool->ucp_ctx, mem->memh,
+                           &rkey_addr, &rkey_addr_len);
+    if (status != UCS_OK) {
+        MCA_COMMON_UCX_VERBOSE(1, "ucp_rkey_pack failed: %d", status);
+        ret = OPAL_ERROR;
+        goto error_rkey_pack;
+    }
+    DBG_OUT("opal_common_ucx_mem_create(after ucp_rkey_pack): rkey_addr = %p, rkey_addr_len = %d\n",
+            (void *)rkey_addr, (int)rkey_addr_len);
+
+    ret = exchange_func(rkey_addr, rkey_addr_len,
+                        &mem->mem_addrs, &mem->mem_displs, exchange_metadata);
+    DBG_OUT("opal_common_ucx_mem_create(after exchange_func): rkey_addr = %p, rkey_addr_len = %d mem_addrs = %p mem_displs = %p\n",
+            (void *)rkey_addr, (int)rkey_addr_len, (void *)mem->mem_addrs, (void *)mem->mem_displs);
+
+    ucp_rkey_buffer_release(rkey_addr);
+    if (ret != OPAL_SUCCESS) {
+        goto error_rkey_pack;
+    }
+
+    /* Dont need the destructor here, will use
+     * wpool-level destructor */
+    pthread_key_create(&mem->mem_tls_key, NULL);
+
     (*mem_ptr) = mem;
 
     DBG_OUT("opal_common_ucx_mem_create(end): mem = %p\n", (void *)mem);
@@ -796,6 +873,7 @@ int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int comm_size,
 
 static void _common_ucx_mem_free(opal_common_ucx_mem_t *mem)
 {
+    pthread_key_delete(mem->mem_tls_key);
     free(mem->mem_addrs);
     free(mem->mem_displs);
     ucp_mem_unmap(mem->ctx->wpool->ucp_ctx, mem->memh);
@@ -851,6 +929,8 @@ _common_ucx_mem_remove(opal_common_ucx_mem_t *mem, _tlocal_mem_t *mem_rec)
     return;
 }
 
+/* TLS management functions */
+
 // TODO: don't want to inline this function
 static _tlocal_table_t* _common_ucx_tls_init(opal_common_ucx_wpool_t *wpool)
 {
@@ -898,7 +978,7 @@ _tlocal_get_tls(opal_common_ucx_wpool_t *wpool){
     return tls;
 }
 
-static void _cleanup_tlocal(void *arg)
+static void _tlocal_cleanup(void *arg)
 {
     _tlocal_table_t *item = NULL, *next;
     _tlocal_table_t *tls = (_tlocal_table_t *)arg;
@@ -959,8 +1039,6 @@ static void _common_ucx_tls_cleanup(_tlocal_table_t *tls)
     return;
 }
 
-
-
 static int
 _tlocal_tls_ctxtbl_extend(_tlocal_table_t *tbl, size_t append)
 {
@@ -1014,7 +1092,7 @@ _tlocal_ctx_search(_tlocal_table_t *tls, int ctx_id)
 static int
 _tlocal_ctx_record_cleanup(_tlocal_ctx_t *ctx_rec)
 {
-    _worker_info_t *winfo = ctx_rec->winfo;
+    opal_common_ucx_winfo_t *winfo = ctx_rec->winfo;
     if (0 == ctx_rec->ctx_id) {
         return OPAL_SUCCESS;
     }
@@ -1101,7 +1179,7 @@ _tlocal_add_ctx(_tlocal_table_t *tls, opal_common_ucx_ctx_t *ctx)
 static int _tlocal_ctx_connect(_tlocal_ctx_t *ctx_rec, int target)
 {
     ucp_ep_params_t ep_params;
-    _worker_info_t *winfo = ctx_rec->winfo;
+    opal_common_ucx_winfo_t *winfo = ctx_rec->winfo;
     opal_common_ucx_ctx_t *gctx = ctx_rec->gctx;
     ucs_status_t status;
     int displ;
@@ -1129,7 +1207,7 @@ _tlocal_ctx_release(opal_common_ucx_ctx_t *ctx)
 {
     _tlocal_table_t * tls = _tlocal_get_tls(ctx->wpool);
     _tlocal_ctx_t *ctx_rec = _tlocal_ctx_search(tls, ctx->ctx_id);
-    _worker_info_t *winfo = NULL;
+    opal_common_ucx_winfo_t *winfo = NULL;
 
     DBG_OUT("_tlocal_ctx_release: ctx = %p ctx_rec = %p, winfo = %p\n",
             (void *)ctx, (void *)ctx_rec, (void *)winfo);
@@ -1194,8 +1272,13 @@ _tlocal_mem_record_cleanup(_tlocal_mem_t *mem_rec)
             		(void *)mem_rec->mem->rkeys[i]);
         }
     }
-
     free(mem_rec->mem->rkeys);
+
+    /* Release fast-path pointers */
+    if (NULL != mem_rec->mem_tls_ptr) {
+        free(mem_rec->mem_tls_ptr);
+    }
+
     free(mem_rec->mem);
 
     memset(mem_rec, 0, sizeof(*mem_rec));
@@ -1250,6 +1333,11 @@ static _tlocal_mem_t *_tlocal_add_mem(_tlocal_table_t *tls,
     tls->mem_tbl[i]->mem->rkeys = calloc(mem->ctx->comm_size,
                                          sizeof(*tls->mem_tbl[i]->mem->rkeys));
 
+    tls->mem_tbl[i]->mem_tls_ptr =
+            calloc(1, sizeof(*tls->mem_tbl[i]->mem_tls_ptr));
+    tls->mem_tbl[i]->mem_tls_ptr->winfo = ctx_rec->winfo;
+    tls->mem_tbl[i]->mem_tls_ptr->rkeys = tls->mem_tbl[i]->mem->rkeys;
+    pthread_setspecific(mem->mem_tls_key, tls->mem_tbl[i]->mem_tls_ptr);
 
     /* Make sure that we completed all the data structures before
      * placing the item to the list
@@ -1287,17 +1375,15 @@ static int _tlocal_mem_create_rkey(_tlocal_mem_t *mem_rec, ucp_ep_h ep, int targ
     return OPAL_SUCCESS;
 }
 
-static inline int _tlocal_fetch(opal_common_ucx_mem_t *mem, int target,
-                                ucp_ep_h *_ep, ucp_rkey_h *_rkey,
-                                _worker_info_t **_winfo)
+/* TODO: no inline */
+OPAL_DECLSPEC int opal_common_ucx_tlocal_fetch_spath(opal_common_ucx_mem_t *mem, int target)
 {
     _tlocal_table_t *tls = NULL;
     _tlocal_ctx_t *ctx_rec = NULL;
-    _worker_info_t *winfo = NULL;
+    opal_common_ucx_winfo_t *winfo = NULL;
     _tlocal_mem_t *mem_rec = NULL;
     _mem_info_t *mem_info = NULL;
     ucp_ep_h ep;
-    ucp_rkey_h rkey;
     int rc = OPAL_SUCCESS;
 
     DBG_OUT("_tlocal_fetch: starttls \n");
@@ -1355,209 +1441,7 @@ static inline int _tlocal_fetch(opal_common_ucx_mem_t *mem, int target,
         DBG_OUT("_tlocal_fetch: creating rkey ...\n");
     }
 
-    *_ep = ep;
-    *_rkey = rkey = mem_info->rkeys[target];
-    *_winfo = winfo;
-
-    DBG_OUT("_tlocal_fetch(end): ep = %p, rkey = %p, winfo = %p\n",
-    		(void *)ep, (void *)rkey, (void *)winfo);
-
     return OPAL_SUCCESS;
-}
-
-
-
-OPAL_DECLSPEC int
-opal_common_ucx_mem_putget(opal_common_ucx_mem_t *mem,
-                           opal_common_ucx_op_t op,
-                           int target, void *buffer, size_t len,
-                           uint64_t rem_addr)
-{
-    ucp_ep_h ep;
-    ucp_rkey_h rkey;
-    ucs_status_t status;
-    _worker_info_t *winfo;
-    int rc = OPAL_SUCCESS;
-
-    rc =_tlocal_fetch(mem, target, &ep, &rkey, &winfo);
-    if(OPAL_SUCCESS != rc){
-    	MCA_COMMON_UCX_VERBOSE(1, "tlocal_fetch failed: %d", rc);
-        return rc;
-    }
-    DBG_OUT("opal_common_ucx_mem_putget(after _tlocal_fetch): mem = %p, ep = %p, rkey = %p, winfo = %p\n",
-    		(void *)mem, (void *)ep, (void *)rkey, (void *)winfo);
-
-    /* Perform the operation */
-    opal_mutex_lock(&winfo->mutex);
-    switch(op){
-    case OPAL_COMMON_UCX_PUT:
-        status = ucp_put_nbi(ep, buffer,len, rem_addr, rkey);
-        // TODO: movethis duplicated if-else out of switch
-        // char *func = "ucp_put_nbi";
-        // verbose("... func = %s...", func);
-        if (status != UCS_OK && status != UCS_INPROGRESS) {
-        	MCA_COMMON_UCX_VERBOSE(1, "ucp_put_nbi failed: %d", status);
-            rc = OPAL_ERROR;
-        } else {
-            DBG_OUT("opal_common_ucx_mem_putget(after ucp_put_nbi): ep = %p, rkey = %p\n",
-                    (void *)ep, (void *)rkey);
-        }
-        break;
-    case OPAL_COMMON_UCX_GET:
-        status = ucp_get_nbi(ep, buffer,len, rem_addr, rkey);
-        if (status != UCS_OK && status != UCS_INPROGRESS) {
-        	MCA_COMMON_UCX_VERBOSE(1, "ucp_get_nbi failed: %d", status);
-            rc = OPAL_ERROR;
-        } else {
-            DBG_OUT("opal_common_ucx_mem_putget(after ucp_get_nbi): ep = %p, rkey = %p\n",
-                    (void *)ep, (void *)rkey);
-        }
-        break;
-    }
-    opal_mutex_unlock(&winfo->mutex);
-    return rc;
-}
-
-
-OPAL_DECLSPEC
-int opal_common_ucx_mem_cmpswp(opal_common_ucx_mem_t *mem,
-		                       uint64_t compare, uint64_t value,
-							   int target, void *buffer, size_t len,
-							   uint64_t rem_addr)
-{
-    ucp_ep_h ep;
-    ucp_rkey_h rkey;
-    _worker_info_t *winfo = NULL;
-    ucs_status_t status;
-    int rc = OPAL_SUCCESS;
-
-    rc =_tlocal_fetch(mem, target, &ep, &rkey, &winfo);
-    if(OPAL_SUCCESS != rc){
-    	MCA_COMMON_UCX_VERBOSE(1, "tlocal_fetch failed: %d", rc);
-        return rc;
-    }
-    DBG_OUT("opal_common_ucx_mem_cmpswp(after _tlocal_fetch): mem = %p, ep = %p, rkey = %p, winfo = %p\n",
-    		(void *)mem, (void *)ep, (void *)rkey, (void *)winfo);
-
-    /* Perform the operation */
-    opal_mutex_lock(&winfo->mutex);
-    status = opal_common_ucx_atomic_cswap(ep, compare, value,
-                                          buffer, len,
-                                          rem_addr, rkey,
-                                          winfo->worker);
-    if (status != UCS_OK) {
-    	MCA_COMMON_UCX_VERBOSE(1, "opal_common_ucx_atomic_cswap failed: %d", status);
-        rc = OPAL_ERROR;
-    } else {
-        DBG_OUT("opal_common_ucx_mem_cmpswp(after opal_common_ucx_atomic_cswap): ep = %p, rkey = %p\n",
-                (void *)ep, (void *)rkey);
-    }
-    opal_mutex_unlock(&winfo->mutex);
-
-    return rc;
-}
-
-OPAL_DECLSPEC
-int opal_common_ucx_mem_fetch(opal_common_ucx_mem_t *mem,
-                              ucp_atomic_fetch_op_t opcode, uint64_t value,
-                              int target, void *buffer, size_t len,
-                              uint64_t rem_addr)
-{
-    ucp_ep_h ep = NULL;
-    ucp_rkey_h rkey = NULL;
-    _worker_info_t *winfo = NULL;
-    ucs_status_t status;
-    int rc = OPAL_SUCCESS;
-
-    rc =_tlocal_fetch(mem, target, &ep, &rkey, &winfo);
-    if(OPAL_SUCCESS != rc){
-    	MCA_COMMON_UCX_VERBOSE(1, "tlocal_fetch failed: %d", rc);
-        return rc;
-    }
-    DBG_OUT("opal_common_ucx_mem_fetch(after _tlocal_fetch): mem = %p, ep = %p, rkey = %p, winfo = %p\n",
-    		(void *)mem, (void *)ep, (void *)rkey, (void *)winfo);
-
-    /* Perform the operation */
-    opal_mutex_lock(&winfo->mutex);
-    status = opal_common_ucx_atomic_fetch(ep, opcode, value,
-                                          buffer, len,
-                                          rem_addr, rkey,
-                                          winfo->worker);
-    if (status != UCS_OK) {
-        MCA_COMMON_UCX_VERBOSE(1, "opal_common_ucx_atomic_fetch failed: %d", status);
-        rc = OPAL_ERROR;
-    } else {
-        DBG_OUT("opal_common_ucx_mem_fetch(after opal_common_ucx_atomic_fetch): ep = %p, rkey = %p\n",
-                (void *)ep, (void *)rkey);
-    }
-    opal_mutex_unlock(&winfo->mutex);
-
-    return rc;
-}
-
-OPAL_DECLSPEC
-int opal_common_ucx_mem_fetch_nb(opal_common_ucx_mem_t *mem,
-                                 ucp_atomic_fetch_op_t opcode,
-                                 uint64_t value,
-                                 int target, void *buffer, size_t len,
-                                 uint64_t rem_addr, ucs_status_ptr_t *ptr)
-{
-    ucp_ep_h ep = NULL;
-    ucp_rkey_h rkey = NULL;
-    _worker_info_t *winfo = NULL;
-    int rc = OPAL_SUCCESS;
-
-    rc =_tlocal_fetch(mem, target, &ep, &rkey, &winfo);
-    if(OPAL_SUCCESS != rc){
-        MCA_COMMON_UCX_VERBOSE(1, "tlocal_fetch failed: %d", rc);
-        return rc;
-    }
-
-    /* Perform the operation */
-    opal_mutex_lock(&winfo->mutex);
-    (*ptr) = opal_common_ucx_atomic_fetch_nb(ep, opcode, value,
-                                             buffer, len,
-                                             rem_addr, rkey,
-                                             winfo->worker);
-    opal_mutex_unlock(&winfo->mutex);
-
-    return rc;
-}
-
-
-OPAL_DECLSPEC
-int opal_common_ucx_mem_post(opal_common_ucx_mem_t *mem,
-                             ucp_atomic_post_op_t opcode,
-                             uint64_t value, int target, size_t len,
-                             uint64_t rem_addr)
-{
-    ucp_ep_h ep;
-    ucp_rkey_h rkey;
-    _worker_info_t *winfo = NULL;
-    ucs_status_t status;
-    int rc = OPAL_SUCCESS;
-
-
-    rc =_tlocal_fetch(mem, target, &ep, &rkey, &winfo);
-    if(OPAL_SUCCESS != rc){
-    	MCA_COMMON_UCX_VERBOSE(1, "tlocal_fetch failed: %d", rc);
-        return rc;
-    }
-    DBG_OUT("opal_common_ucx_mem_post(after _tlocal_fetch): mem = %p, ep = %p, rkey = %p, winfo = %p\n",
-    		(void *)mem, (void *)ep, (void *)rkey, (void *)winfo);
-
-    /* Perform the operation */
-    opal_mutex_lock(&winfo->mutex);
-    status = ucp_atomic_post(ep, opcode, value,
-                             len, rem_addr, rkey);
-    if (status != UCS_OK) {
-        MCA_COMMON_UCX_ERROR("ucp_atomic_post failed: %d", status);
-        rc = OPAL_ERROR;
-    } else {
-        DBG_OUT("opal_common_ucx_mem_post(after ucp_atomic_post): ep = %p, rkey = %p\n", (void *)ep, (void *)rkey);
-    }
-    opal_mutex_unlock(&winfo->mutex);
-    return rc;
 }
 
 OPAL_DECLSPEC int
@@ -1573,7 +1457,7 @@ opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
 
     // TODO: make this as a read lock
     opal_mutex_lock(&ctx->mutex);
-    OPAL_LIST_FOREACH(item, &ctx->workers, _ctx_record_list_item_t) {
+    OPAL_LIST_FOREACH(item, &ctx->tls_workers, _ctx_record_list_item_t) {
         switch (scope) {
         case OPAL_COMMON_UCX_SCOPE_WORKER:
             opal_mutex_lock(&item->ptr->winfo->mutex);
@@ -1612,4 +1496,3 @@ opal_common_ucx_mem_fence(opal_common_ucx_mem_t *mem) {
     /* TODO */
     return OPAL_SUCCESS;
 }
-

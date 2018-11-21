@@ -4,24 +4,16 @@
 #include "opal_config.h"
 #include "common_ucx.h"
 
-typedef struct  {
-    opal_mutex_t mutex;
-    int released;
-    ucp_worker_h worker;
-    ucp_ep_h *endpoints;
-    size_t comm_size;
-} _worker_info_t;
-
 typedef struct {
     int ctx_id;
     // TODO: make sure that this is being set by external thread
     int is_freed;
     opal_common_ucx_ctx_t *gctx;
-    _worker_info_t *winfo;
+    opal_common_ucx_winfo_t *winfo;
 } _tlocal_ctx_t;
 
 typedef struct {
-    _worker_info_t *worker;
+    opal_common_ucx_winfo_t *worker;
     ucp_rkey_h *rkeys;
 } _mem_info_t;
 
@@ -30,11 +22,12 @@ typedef struct {
     int is_freed;
     opal_common_ucx_mem_t *gmem;
     _mem_info_t *mem;
+    opal_common_ucx_tlocal_fast_ptrs_t *mem_tls_ptr;
 } _tlocal_mem_t;
 
 typedef struct {
     opal_list_item_t super;
-    _worker_info_t *ptr;
+    opal_common_ucx_winfo_t *ptr;
 } _winfo_list_item_t;
 OBJ_CLASS_DECLARATION(_winfo_list_item_t);
 
@@ -81,23 +74,23 @@ static int _tlocal_mem_create_rkey(_tlocal_mem_t *mem_rec, ucp_ep_h ep, int targ
 static void _tlocal_mem_record_cleanup(_tlocal_mem_t *mem_rec);
 
 
-static void _cleanup_tlocal(void *arg);
+static void _tlocal_cleanup(void *arg);
 
 /* Sorted declarations */
-static _worker_info_t *_winfo_create(opal_common_ucx_wpool_t *wpool);
-static void _winfo_release(_worker_info_t *winfo);
-static void _winfo_reset(_worker_info_t *winfo);
+static opal_common_ucx_winfo_t *_winfo_create(opal_common_ucx_wpool_t *wpool);
+static void _winfo_release(opal_common_ucx_winfo_t *winfo);
+static void _winfo_reset(opal_common_ucx_winfo_t *winfo);
 
 static int _wpool_list_put(opal_common_ucx_wpool_t *wpool, opal_list_t *list,
-                           _worker_info_t *winfo);
+                           opal_common_ucx_winfo_t *winfo);
 static int _wpool_list_put(opal_common_ucx_wpool_t *wpool, opal_list_t *list,
-                           _worker_info_t *winfo);
-static _worker_info_t *_wpool_list_get(opal_common_ucx_wpool_t *wpool,
+                           opal_common_ucx_winfo_t *winfo);
+static opal_common_ucx_winfo_t *_wpool_list_get(opal_common_ucx_wpool_t *wpool,
                                        opal_list_t *list);
-static _worker_info_t *_wpool_get_idle(opal_common_ucx_wpool_t *wpool,
+static opal_common_ucx_winfo_t *_wpool_get_idle(opal_common_ucx_wpool_t *wpool,
                                        size_t comm_size);
 static int _wpool_add_active(opal_common_ucx_wpool_t *wpool,
-                             _worker_info_t *winfo);
+                             opal_common_ucx_winfo_t *winfo);
 
 
 
