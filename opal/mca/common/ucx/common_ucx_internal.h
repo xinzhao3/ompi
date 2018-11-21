@@ -6,6 +6,7 @@
 
 typedef struct  {
     opal_mutex_t mutex;
+    int released;
     ucp_worker_h worker;
     ucp_ep_h *endpoints;
     size_t comm_size;
@@ -34,21 +35,21 @@ typedef struct {
 typedef struct {
     opal_list_item_t super;
     _worker_info_t *ptr;
-} _idle_list_item_t;
-OBJ_CLASS_DECLARATION(_idle_list_item_t);
+} _winfo_list_item_t;
+OBJ_CLASS_DECLARATION(_winfo_list_item_t);
 
 
 typedef struct {
     opal_list_item_t super;
     _tlocal_ctx_t *ptr;
-} _worker_list_item_t;
-OBJ_CLASS_DECLARATION(_worker_list_item_t);
+} _ctx_record_list_item_t;
+OBJ_CLASS_DECLARATION(_ctx_record_list_item_t);
 
 typedef struct {
     opal_list_item_t super;
     _tlocal_mem_t *ptr;
-} _mem_region_list_item_t;
-OBJ_CLASS_DECLARATION(_mem_region_list_item_t);
+} _mem_record_list_item_t;
+OBJ_CLASS_DECLARATION(_mem_record_list_item_t);
 
 /* thread-local table */
 typedef struct {
@@ -72,17 +73,32 @@ static inline _tlocal_ctx_t *_tlocal_ctx_search(_tlocal_table_t *tls, int ctx_id
 static int _tlocal_ctx_record_cleanup(_tlocal_ctx_t *ctx_rec);
 static _tlocal_ctx_t *_tlocal_add_ctx(_tlocal_table_t *tls, opal_common_ucx_ctx_t *ctx);
 static int _tlocal_ctx_connect(_tlocal_ctx_t *ctx, int target);
-static int _tlocal_ctx_release(opal_common_ucx_ctx_t *ctx);
+static void _tlocal_ctx_release(opal_common_ucx_ctx_t *ctx);
 static inline _tlocal_mem_t *_tlocal_search_mem(_tlocal_table_t *tls, int mem_id);
 static _tlocal_mem_t *_tlocal_add_mem(_tlocal_table_t *tls, opal_common_ucx_mem_t *mem);
 static int _tlocal_mem_create_rkey(_tlocal_mem_t *mem_rec, ucp_ep_h ep, int target);
 // TOD: Return the error from it
 static void _tlocal_mem_record_cleanup(_tlocal_mem_t *mem_rec);
 
-static ucp_worker_h _create_ctx_worker(opal_common_ucx_wpool_t *wpool);
-static int _wpool_idle_put(opal_common_ucx_wpool_t *wpool,
-                           _worker_info_t *winfo);
+
 static void _cleanup_tlocal(void *arg);
+
+/* Sorted declarations */
+static _worker_info_t *_winfo_create(opal_common_ucx_wpool_t *wpool);
+static void _winfo_release(_worker_info_t *winfo);
+static void _winfo_reset(_worker_info_t *winfo);
+
+static int _wpool_list_put(opal_common_ucx_wpool_t *wpool, opal_list_t *list,
+                           _worker_info_t *winfo);
+static int _wpool_list_put(opal_common_ucx_wpool_t *wpool, opal_list_t *list,
+                           _worker_info_t *winfo);
+static _worker_info_t *_wpool_list_get(opal_common_ucx_wpool_t *wpool,
+                                       opal_list_t *list);
+static _worker_info_t *_wpool_get_idle(opal_common_ucx_wpool_t *wpool,
+                                       size_t comm_size);
+static int _wpool_add_active(opal_common_ucx_wpool_t *wpool,
+                             _worker_info_t *winfo);
+
 
 
 

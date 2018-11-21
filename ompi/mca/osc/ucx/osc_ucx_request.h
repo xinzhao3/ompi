@@ -33,7 +33,7 @@ typedef struct ompi_osc_ucx_internal_request {
             item = opal_free_list_get(&mca_osc_ucx_component.requests); \
             if (item == NULL) {                                         \
                 if (mca_osc_ucx_component.num_incomplete_req_ops > 0) { \
-                    opal_common_ucx_workers_progress(mca_osc_ucx_component.wpool); \
+                    opal_common_ucx_wpool_progress(mca_osc_ucx_component.wpool); \
                 }                                                       \
             }                                                           \
         } while (item == NULL);                                         \

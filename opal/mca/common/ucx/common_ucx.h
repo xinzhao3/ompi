@@ -115,6 +115,8 @@ typedef struct {
 
     /* Bookkeeping information */
     opal_list_t idle_workers;
+    opal_list_t active_workers;
+
     opal_atomic_int32_t cur_ctxid, cur_memid;
     opal_list_t tls_list;
 } opal_common_ucx_wpool_t;
@@ -158,6 +160,7 @@ typedef int (*opal_common_ucx_exchange_func_t)(void *my_info, size_t my_info_len
                                                char **recv_info, int **disps,
                                                void *metadata);
 
+/* Manage Worker Pool (wpool) */
 OPAL_DECLSPEC opal_common_ucx_wpool_t * opal_common_ucx_wpool_allocate(void);
 OPAL_DECLSPEC void opal_common_ucx_wpool_free(opal_common_ucx_wpool_t *wpool);
 OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
@@ -165,11 +168,16 @@ OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
                                              ucp_request_init_callback_t req_init_ptr,
                                              size_t req_size, bool enable_mt);
 OPAL_DECLSPEC void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool);
+OPAL_DECLSPEC void opal_common_ucx_wpool_progress(opal_common_ucx_wpool_t *wpool);
+
+/* Manage Communication context */
 OPAL_DECLSPEC int opal_common_ucx_ctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
                                              opal_common_ucx_exchange_func_t exchange_func,
                                              void *exchange_metadata,
                                              opal_common_ucx_ctx_t **ctx_ptr);
 OPAL_DECLSPEC void opal_common_ucx_ctx_release(opal_common_ucx_ctx_t *ctx);
+
+/* Manage Memory registrations */
 OPAL_DECLSPEC int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int comm_size,
                                              void **mem_base, size_t mem_size,
                                              opal_common_ucx_mem_type_t mem_type,
@@ -179,13 +187,14 @@ OPAL_DECLSPEC int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int com
 OPAL_DECLSPEC int opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
                                             opal_common_ucx_flush_scope_t scope,
                                             int target);
+
 OPAL_DECLSPEC int opal_common_ucx_mem_fetch_nb(opal_common_ucx_mem_t *mem,
                                                ucp_atomic_fetch_op_t opcode,
                                                uint64_t value,
                                                int target, void *buffer, size_t len,
                                                uint64_t rem_addr, ucs_status_ptr_t *ptr);
 OPAL_DECLSPEC int opal_common_ucx_mem_fence(opal_common_ucx_mem_t *mem);
-OPAL_DECLSPEC int opal_common_ucx_workers_progress(opal_common_ucx_wpool_t *wpool);
+
 OPAL_DECLSPEC int opal_common_ucx_mem_cmpswp(opal_common_ucx_mem_t *mem,
                                              uint64_t compare, uint64_t value,
                                              int target,

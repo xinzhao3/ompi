@@ -222,9 +222,9 @@ OPAL_DECLSPEC int opal_common_ucx_del_procs(opal_common_ucx_del_proc_t *procs, s
 
 /***********************************************************************/
 
-OBJ_CLASS_INSTANCE(_idle_list_item_t, opal_list_item_t, NULL, NULL);
-OBJ_CLASS_INSTANCE(_worker_list_item_t, opal_list_item_t, NULL, NULL);
-OBJ_CLASS_INSTANCE(_mem_region_list_item_t, opal_list_item_t, NULL, NULL);
+OBJ_CLASS_INSTANCE(_winfo_list_item_t, opal_list_item_t, NULL, NULL);
+OBJ_CLASS_INSTANCE(_ctx_record_list_item_t, opal_list_item_t, NULL, NULL);
+OBJ_CLASS_INSTANCE(_mem_record_list_item_t, opal_list_item_t, NULL, NULL);
 OBJ_CLASS_INSTANCE(_tlocal_table_t, opal_list_item_t, NULL, NULL);
 
 //static pthread_key_t _tlocal_key = {0};
@@ -233,6 +233,73 @@ OBJ_CLASS_INSTANCE(_tlocal_table_t, opal_list_item_t, NULL, NULL);
 __thread FILE *tls_pf = NULL;
 __thread int initialized = 0;
 #endif
+
+/* Worker information (winfo) management functions */
+
+static _worker_info_t *
+_winfo_create(opal_common_ucx_wpool_t *wpool)
+{
+    ucp_worker_params_t worker_params;
+    ucp_worker_h worker;
+    ucs_status_t status;
+    _worker_info_t *winfo = NULL;
+
+    memset(&worker_params, 0, sizeof(worker_params));
+    worker_params.field_mask = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
+    worker_params.thread_mode = UCS_THREAD_MODE_SINGLE;
+    status = ucp_worker_create(wpool->ucp_ctx, &worker_params, &worker);
+    if (UCS_OK != status) {
+        MCA_COMMON_UCX_ERROR("ucp_worker_create failed: %d", status);
+        goto exit;
+    }
+
+    winfo = calloc(1, sizeof(*winfo));
+    if (NULL == winfo) {
+        MCA_COMMON_UCX_ERROR("Cannot allocate memory for worker info");
+        goto release_worker;
+    }
+
+    OBJ_CONSTRUCT(&winfo->mutex, opal_mutex_t);
+    winfo->worker = worker;
+    winfo->endpoints = NULL;
+    winfo->comm_size = 0;
+    winfo->released = 0;
+
+    DBG_OUT("_winfo_create: worker = %p\n", (void *)worker);
+
+release_worker:
+    ucp_worker_destroy(worker);
+exit:
+    return winfo;
+}
+
+static void _winfo_reset(_worker_info_t *winfo)
+{
+    if(winfo->comm_size != 0) {
+        size_t i;
+        for (i = 0; i < winfo->comm_size; i++) {
+            if (NULL != winfo->endpoints[i]){
+                ucp_ep_destroy(winfo->endpoints[i]);
+            }
+        }
+        free(winfo->endpoints);
+    }
+    winfo->endpoints = NULL;
+    winfo->comm_size = 0;
+    winfo->released = 0;
+}
+
+static void
+_winfo_release(_worker_info_t *winfo)
+{
+    DBG_OUT("_release_ctx_worker: winfo = %p, worker = %p\n",
+            (void*)winfo, (void *)winfo->worker);
+    OBJ_DESTRUCT(&winfo->mutex);
+    ucp_worker_destroy(winfo->worker);
+    free(winfo);
+}
+
+
 
 /* Worker Pool (wpool) management */
 
@@ -307,19 +374,15 @@ int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
 
     /* create recv worker and add to idle pool */
     OBJ_CONSTRUCT(&wpool->idle_workers, opal_list_t);
-    wpool->recv_worker = _create_ctx_worker(wpool);
-    if (wpool->recv_worker == NULL) {
-        MCA_COMMON_UCX_VERBOSE(1, "_create_ctx_worker failed");
+    OBJ_CONSTRUCT(&wpool->active_workers, opal_list_t);
+
+    winfo = _winfo_create(wpool);
+    if (NULL == winfo) {
+        MCA_COMMON_UCX_ERROR("Failed to create receive worker");
         rc = OPAL_ERROR;
         goto err_worker_create;
     }
-
-    winfo = calloc(1, sizeof(_worker_info_t));
-    OBJ_CONSTRUCT(&winfo->mutex, opal_mutex_t);
-
-    winfo->worker = wpool->recv_worker;
-    winfo->endpoints = NULL;
-    winfo->comm_size = 0;
+    wpool->recv_worker = winfo->worker;
 
     status = ucp_worker_get_address(wpool->recv_worker,
                                     &wpool->recv_waddr, &wpool->recv_waddr_len);
@@ -329,7 +392,7 @@ int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
         goto err_get_addr;
     }
 
-    rc = _wpool_idle_put(wpool, winfo);
+    rc = _wpool_list_put(wpool, &wpool->idle_workers, winfo);
     if (rc) {
         goto err_wpool_add;
     }
@@ -364,115 +427,112 @@ void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
         return;
     }
 
+    /* After this have been called no thread cleanup callback
+     * will be called */
     pthread_key_delete(wpool->tls_key);
 
-    opal_mutex_lock(&wpool->mutex);
+    /* Go over remaining TLS structures and release it */
     OPAL_LIST_FOREACH_SAFE(tls_item, tls_next, &wpool->tls_list, _tlocal_table_t) {
         opal_list_remove_item(&wpool->tls_list, &tls_item->super);
-        opal_mutex_unlock(&wpool->mutex);
-
         _common_ucx_tls_cleanup(tls_item);
-
-        opal_mutex_lock(&wpool->mutex);
         DBG_OUT("opal_common_ucx_wpool_finalize: cleanup wpool = %p\n", (void *)wpool);
     }
-    opal_mutex_unlock(&wpool->mutex);
+    OBJ_DESTRUCT(&wpool->tls_list);
 
     /* Release the address here. recv worker will be released
      * below along with other idle workers */
     ucp_worker_release_address(wpool->recv_worker, wpool->recv_waddr);
 
-    opal_mutex_lock(&wpool->mutex);
     /* Go over the list, free idle list items */
     if (!opal_list_is_empty(&wpool->idle_workers)) {
-        _idle_list_item_t *item, *next;
-        OPAL_LIST_FOREACH_SAFE(item, next, &wpool->idle_workers, _idle_list_item_t) {
-            _worker_info_t *curr_worker;
+        _winfo_list_item_t *item, *next;
+        OPAL_LIST_FOREACH_SAFE(item, next, &wpool->idle_workers, _winfo_list_item_t) {
             opal_list_remove_item(&wpool->idle_workers, &item->super);
-            curr_worker = item->ptr;
-            OBJ_DESTRUCT(&curr_worker->mutex);
-            ucp_worker_destroy(curr_worker->worker);
-            free(curr_worker);
+            _winfo_release(item->ptr);
             OBJ_RELEASE(item);
         }
     }
-    opal_mutex_unlock(&wpool->mutex);
-
     OBJ_DESTRUCT(&wpool->idle_workers);
-    OBJ_DESTRUCT(&wpool->tls_list);
+
+    /* Release active workers. They are no longer active actually
+     * because opal_common_ucx_wpool_finalize is being called. */
+    if (!opal_list_is_empty(&wpool->active_workers)) {
+        _winfo_list_item_t *item, *next;
+        OPAL_LIST_FOREACH_SAFE(item, next, &wpool->active_workers, _winfo_list_item_t) {
+            opal_list_remove_item(&wpool->active_workers, &item->super);
+            _winfo_release(item->ptr);
+            OBJ_RELEASE(item);
+        }
+    }
+    OBJ_DESTRUCT(&wpool->active_workers);
+
     OBJ_DESTRUCT(&wpool->mutex);
     ucp_cleanup(wpool->ucp_ctx);
     DBG_OUT("opal_common_ucx_wpool_finalize: wpool = %p\n", (void *)wpool);
     return;
 }
 
-static void _cleanup_tlocal(void *arg)
+OPAL_DECLSPEC void
+opal_common_ucx_wpool_progress(opal_common_ucx_wpool_t *wpool)
 {
-    _tlocal_table_t *item = NULL, *next;
-    _tlocal_table_t *tls = (_tlocal_table_t *)arg;
-    opal_common_ucx_wpool_t *wpool = NULL;
+    _winfo_list_item_t *item = NULL, *next = NULL;
 
-    DBG_OUT("_cleanup_tlocal: start\n");
+    /* Go over all active workers and progress them
+     * TODO: may want to have some partitioning to progress only part of
+     * workers */
 
-    if (NULL == tls) {
-        return;
-    }
-
-    wpool = tls->wpool;
-    /* 1. Remove us from tls_list */
-    tls->wpool = wpool;
     opal_mutex_lock(&wpool->mutex);
-    OPAL_LIST_FOREACH_SAFE(item, next, &wpool->tls_list, _tlocal_table_t) {
-        if (item == tls) {
-            opal_list_remove_item(&wpool->tls_list, &item->super);
-            break;
+    OPAL_LIST_FOREACH_SAFE(item, next, &wpool->active_workers,
+                           _winfo_list_item_t) {
+        _worker_info_t *winfo = item->ptr;
+        opal_mutex_lock(&winfo->mutex);
+        if( OPAL_UNLIKELY(winfo->released) ) {
+            /* Do garbage collection of worker info's if needed */
+            opal_list_remove_item(&wpool->active_workers, &item->super);
+            _winfo_reset(winfo);
+            opal_list_append(&wpool->idle_workers, &item->super);
+        } else {
+            /* Progress worker until there are existing events */
+            while(ucp_worker_progress(winfo->worker));
         }
+        opal_mutex_unlock(&winfo->mutex);
     }
+
     opal_mutex_unlock(&wpool->mutex);
-    _common_ucx_tls_cleanup(tls);
 }
 
 static int
-_wpool_idle_put(opal_common_ucx_wpool_t *wpool, _worker_info_t *winfo)
+_wpool_list_put(opal_common_ucx_wpool_t *wpool, opal_list_t *list,
+                _worker_info_t *winfo)
 {
-    _idle_list_item_t *item;
+    _winfo_list_item_t *item;
 
-    if(winfo->comm_size != 0) {
-        size_t i;
-        for (i = 0; i < winfo->comm_size; i++) {
-            if (NULL != winfo->endpoints[i]){
-                ucp_ep_destroy(winfo->endpoints[i]);
-            }
-        }
-        free(winfo->endpoints);
-        winfo->endpoints = NULL;
-        winfo->comm_size = 0;
-    }
-
-    item = OBJ_NEW(_idle_list_item_t);
+    item = OBJ_NEW(_winfo_list_item_t);
     if (NULL == item) {
+        MCA_COMMON_UCX_ERROR("Cannot allocate memory for winfo list item");
         return OPAL_ERR_OUT_OF_RESOURCE;
     }
     item->ptr = winfo;
 
     opal_mutex_lock(&wpool->mutex);
-    opal_list_append(&wpool->idle_workers, &item->super);
+    opal_list_append(list, &item->super);
     opal_mutex_unlock(&wpool->mutex);
 
-    DBG_OUT("_wpool_add_to_idle: wpool = %p winfo = %p\n", (void *)wpool, (void *)winfo);
+    DBG_OUT("_wpool_list_put: wpool = %p winfo = %p\n",
+            (void *)wpool, (void *)winfo);
     return OPAL_SUCCESS;
 }
 
 static _worker_info_t*
-_wpool_idle_get(opal_common_ucx_wpool_t *wpool)
+_wpool_list_get(opal_common_ucx_wpool_t *wpool, opal_list_t *list)
 {
     _worker_info_t *winfo = NULL;
-    _idle_list_item_t *item = NULL;
+    _winfo_list_item_t *item = NULL;
 
     opal_mutex_lock(&wpool->mutex);
-    if (!opal_list_is_empty(&wpool->idle_workers)) {
-        item = (_idle_list_item_t *)opal_list_get_first(&wpool->idle_workers);
-        opal_list_remove_item(&wpool->idle_workers, &item->super);
+    if (!opal_list_is_empty(list)) {
+        item = (_winfo_list_item_t *)opal_list_get_first(list);
+        opal_list_remove_item(list, &item->super);
     }
     opal_mutex_unlock(&wpool->mutex);
 
@@ -485,8 +545,34 @@ _wpool_idle_get(opal_common_ucx_wpool_t *wpool)
     return winfo;
 }
 
-/* Communication context management */
+static _worker_info_t *
+_wpool_get_idle(opal_common_ucx_wpool_t *wpool, size_t comm_size)
+{
+    _worker_info_t *winfo;
+    winfo = _wpool_list_get(wpool, &wpool->idle_workers);
+    if (!winfo) {
+        winfo = _winfo_create(wpool);
+        if (!winfo) {
+            MCA_COMMON_UCX_ERROR("Failed to allocate worker info structure");
+            return NULL;
+        }
+    }
 
+    DBG_OUT("_wpool_get_idle: wpool = %p winfo = %p\n",
+            (void *)wpool, (void *)winfo);
+    winfo->endpoints = calloc(comm_size, sizeof(ucp_ep_h));
+    winfo->comm_size = comm_size;
+    return winfo;
+}
+
+static int
+_wpool_add_active(opal_common_ucx_wpool_t *wpool, _worker_info_t *winfo)
+{
+    return _wpool_list_put(wpool, &wpool->active_workers, winfo);
+}
+
+
+/* Communication context management */
 OPAL_DECLSPEC
 int opal_common_ucx_ctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
                                opal_common_ucx_exchange_func_t exchange_func,
@@ -533,26 +619,6 @@ opal_common_ucx_ctx_release(opal_common_ucx_ctx_t *ctx)
     _tlocal_ctx_release(ctx);
 }
 
-static ucp_worker_h
-_create_ctx_worker(opal_common_ucx_wpool_t *wpool)
-{
-    ucp_worker_params_t worker_params;
-    ucp_worker_h worker;
-    ucs_status_t status;
-
-    memset(&worker_params, 0, sizeof(worker_params));
-    worker_params.field_mask = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
-    worker_params.thread_mode = UCS_THREAD_MODE_SINGLE;
-    status = ucp_worker_create(wpool->ucp_ctx, &worker_params, &worker);
-    if (UCS_OK != status) {
-        MCA_COMMON_UCX_VERBOSE(1, "ucp_worker_create failed: %d", status);
-        return NULL;
-    }
-
-    DBG_OUT("_create_ctx_worker: worker = %p\n", (void *)worker);
-
-    return worker;
-}
 
 static void _common_ucx_ctx_free(opal_common_ucx_ctx_t *ctx)
 {
@@ -567,7 +633,7 @@ static void _common_ucx_ctx_free(opal_common_ucx_ctx_t *ctx)
 static int
 _common_ucx_ctx_append(opal_common_ucx_ctx_t *ctx, _tlocal_ctx_t *ctx_rec)
 {
-    _worker_list_item_t *item = OBJ_NEW(_worker_list_item_t);
+    _ctx_record_list_item_t *item = OBJ_NEW(_ctx_record_list_item_t);
     if (NULL == item) {
         return OPAL_ERR_OUT_OF_RESOURCE;
     }
@@ -583,10 +649,10 @@ static void
 _common_ucx_ctx_remove(opal_common_ucx_ctx_t *ctx, _tlocal_ctx_t *ctx_rec)
 {
     int can_free = 0;
-    _worker_list_item_t *item = NULL, *next;
+    _ctx_record_list_item_t *item = NULL, *next;
 
     opal_mutex_lock(&ctx->mutex);
-    OPAL_LIST_FOREACH_SAFE(item, next, &ctx->workers, _worker_list_item_t) {
+    OPAL_LIST_FOREACH_SAFE(item, next, &ctx->workers, _ctx_record_list_item_t) {
         if (ctx_rec == item->ptr) {
             opal_list_remove_item(&ctx->workers, &item->super);
             OBJ_RELEASE(item);
@@ -743,7 +809,7 @@ static int
 _common_ucx_mem_append(opal_common_ucx_mem_t *mem,
                        _tlocal_mem_t *mem_rec)
 {
-    _mem_region_list_item_t *item = OBJ_NEW(_mem_region_list_item_t);
+    _mem_record_list_item_t *item = OBJ_NEW(_mem_record_list_item_t);
     if (NULL == item) {
         return OPAL_ERR_OUT_OF_RESOURCE;
     }
@@ -759,10 +825,11 @@ static void
 _common_ucx_mem_remove(opal_common_ucx_mem_t *mem, _tlocal_mem_t *mem_rec)
 {
     int can_free = 0;
-    _mem_region_list_item_t *item = NULL, *next;
+    _mem_record_list_item_t *item = NULL, *next;
 
     opal_mutex_lock(&mem->mutex);
-    OPAL_LIST_FOREACH_SAFE(item, next, &mem->registrations, _mem_region_list_item_t) {
+    OPAL_LIST_FOREACH_SAFE(item, next, &mem->registrations,
+                           _mem_record_list_item_t) {
         if (mem_rec == item->ptr) {
             opal_list_remove_item(&mem->registrations, &item->super);
             OBJ_RELEASE(item);
@@ -779,10 +846,10 @@ _common_ucx_mem_remove(opal_common_ucx_mem_t *mem, _tlocal_mem_t *mem_rec)
          * we can safely release communication context structure */
         _common_ucx_mem_free(mem);
     }
-    DBG_OUT("_common_ucx_mem_remove(end): mem = %p mem_rec = %p\n", (void *)mem, (void *)mem_rec);
+    DBG_OUT("_common_ucx_mem_remove(end): mem = %p mem_rec = %p\n",
+            (void *)mem, (void *)mem_rec);
     return;
 }
-
 
 // TODO: don't want to inline this function
 static _tlocal_table_t* _common_ucx_tls_init(opal_common_ucx_wpool_t *wpool)
@@ -826,11 +893,38 @@ _tlocal_get_tls(opal_common_ucx_wpool_t *wpool){
     if( OPAL_UNLIKELY(NULL == tls) ) {
         tls = _common_ucx_tls_init(wpool);
     }
-    DBG_OUT("_tlocal_get_tls(end): wpool = %p tls = %p\n", (void *)wpool, (void *)tls);
+    DBG_OUT("_tlocal_get_tls(end): wpool = %p tls = %p\n",
+            (void *)wpool, (void *)tls);
     return tls;
 }
 
-_worker_list_item_t *item = NULL, *next;
+static void _cleanup_tlocal(void *arg)
+{
+    _tlocal_table_t *item = NULL, *next;
+    _tlocal_table_t *tls = (_tlocal_table_t *)arg;
+    opal_common_ucx_wpool_t *wpool = NULL;
+
+    DBG_OUT("_cleanup_tlocal: start\n");
+
+    if (NULL == tls) {
+        return;
+    }
+
+    wpool = tls->wpool;
+    /* 1. Remove us from tls_list */
+    tls->wpool = wpool;
+    opal_mutex_lock(&wpool->mutex);
+    OPAL_LIST_FOREACH_SAFE(item, next, &wpool->tls_list, _tlocal_table_t) {
+        if (item == tls) {
+            opal_list_remove_item(&wpool->tls_list, &item->super);
+            break;
+        }
+    }
+    opal_mutex_unlock(&wpool->mutex);
+    _common_ucx_tls_cleanup(tls);
+}
+
+_ctx_record_list_item_t *item = NULL, *next;
 
 // TODO: don't want to inline this function
 static void _common_ucx_tls_cleanup(_tlocal_table_t *tls)
@@ -865,27 +959,7 @@ static void _common_ucx_tls_cleanup(_tlocal_table_t *tls)
     return;
 }
 
-static int
-_tlocal_tls_get_worker(_tlocal_table_t *tls, _worker_info_t **_winfo)
-{
-    _worker_info_t *winfo;
-    *_winfo = NULL;
-    winfo = _wpool_idle_get(tls->wpool);
-    if (!winfo) {
-        winfo = calloc(1, sizeof(*winfo));
-        if (!winfo) {
-            return OPAL_ERR_OUT_OF_RESOURCE;
-        }
-        OBJ_CONSTRUCT(&winfo->mutex, opal_mutex_t);
-        winfo->worker = _create_ctx_worker(tls->wpool);
-        winfo->endpoints = NULL;
-        winfo->comm_size = 0;
-    }
-    *_winfo = winfo;
-    DBG_OUT("_tlocal_tls_get_worker(end): tls = %p winfo = %p\n", (void *)tls, (void *)winfo);
 
-    return OPAL_SUCCESS;
-}
 
 static int
 _tlocal_tls_ctxtbl_extend(_tlocal_table_t *tbl, size_t append)
@@ -904,6 +978,7 @@ _tlocal_tls_ctxtbl_extend(_tlocal_table_t *tbl, size_t append)
     DBG_OUT("_tlocal_tls_ctxtbl_extend(end): tbl = %p\n", (void *)tbl);
     return OPAL_SUCCESS;
 }
+
 static int
 _tlocal_tls_memtbl_extend(_tlocal_table_t *tbl, size_t append)
 {
@@ -939,7 +1014,7 @@ _tlocal_ctx_search(_tlocal_table_t *tls, int ctx_id)
 static int
 _tlocal_ctx_record_cleanup(_tlocal_ctx_t *ctx_rec)
 {
-    int rc;
+    _worker_info_t *winfo = ctx_rec->winfo;
     if (0 == ctx_rec->ctx_id) {
         return OPAL_SUCCESS;
     }
@@ -948,13 +1023,13 @@ _tlocal_ctx_record_cleanup(_tlocal_ctx_t *ctx_rec)
      * delayed cleanup */
     _common_ucx_ctx_remove(ctx_rec->gctx, ctx_rec);
 
-    /* Return the worker back to the
-     * This may result in context release as we are using
-     * delayed cleanup */
-    rc = _wpool_idle_put(ctx_rec->gctx->wpool, ctx_rec->winfo);
-    if (rc) {
-        return rc;
-    }
+    /* Mark this winfo as free and it will be garbage-collected by
+     * progress or flush function */
+    opal_mutex_lock(&winfo->mutex);
+    winfo->released = 1;
+    opal_mutex_unlock(&winfo->mutex);
+
+    /* Erase the record so it can be reused */
     memset(ctx_rec, 0, sizeof(*ctx_rec));
     DBG_OUT("_tlocal_cleanup_ctx_record(end): ctx_rec = %p\n", (void *)ctx_rec);
     return OPAL_SUCCESS;
@@ -967,7 +1042,7 @@ _tlocal_add_ctx(_tlocal_table_t *tls, opal_common_ucx_ctx_t *ctx)
     size_t i;
     int rc;
 
-    /* Try to find available spot in the table */
+    /* Try to find available record in the TLS table */
     for (i=0; i<tls->ctx_tbl_size; i++) {
         if (0 == tls->ctx_tbl[i]->ctx_id) {
             /* Found clean record */
@@ -980,6 +1055,7 @@ _tlocal_add_ctx(_tlocal_table_t *tls, opal_common_ucx_ctx_t *ctx)
         }
     }
 
+    /* if needed - extend the table */
     if( i >= tls->ctx_tbl_size ){
         i = tls->ctx_tbl_size;
         rc = _tlocal_tls_ctxtbl_extend(tls, 4);
@@ -991,23 +1067,21 @@ _tlocal_add_ctx(_tlocal_table_t *tls, opal_common_ucx_ctx_t *ctx)
 
     tls->ctx_tbl[i]->ctx_id = ctx->ctx_id;
     tls->ctx_tbl[i]->gctx = ctx;
-    rc = _tlocal_tls_get_worker(tls, &tls->ctx_tbl[i]->winfo);
-    if (rc) {
-        //TODO: error out
+    tls->ctx_tbl[i]->winfo = _wpool_get_idle(tls->wpool, ctx->comm_size);
+    if (NULL == tls->ctx_tbl[i]->winfo) {
+        MCA_COMMON_UCX_ERROR("Failed to allocate new worker");
         return NULL;
     }
-    DBG_OUT("_tlocal_add_ctx(after _tlocal_tls_get_worker): tls = %p winfo = %p\n",
-    		(void *)tls, (void *)tls->ctx_tbl[i]->winfo);
-    tls->ctx_tbl[i]->winfo->endpoints = calloc(ctx->comm_size, sizeof(ucp_ep_h));
-    tls->ctx_tbl[i]->winfo->comm_size = ctx->comm_size;
-
 
     /* Make sure that we completed all the data structures before
-             * placing the item to the list
-             * NOTE: essentially we don't need this as list append is an
-             * operation protected by mutex
-             */
+     * placing the item to the list
+     * NOTE: essentially we don't need this as list append is an
+     * operation protected by mutex
+     */
     opal_atomic_wmb();
+
+    /* Add this worker to the active worker list */
+    _wpool_add_active(tls->wpool, tls->ctx_tbl[i]->winfo);
 
     /* add this worker into the context list */
     rc = _common_ucx_ctx_append(ctx, tls->ctx_tbl[i]);
@@ -1015,8 +1089,10 @@ _tlocal_add_ctx(_tlocal_table_t *tls, opal_common_ucx_ctx_t *ctx)
         //TODO: error out
         return NULL;
     }
-    DBG_OUT("_tlocal_add_ctx(after _common_ucx_ctx_append): ctx = %p tls->ctx_tbl = %p\n",
-    		(void *)ctx, (void *)tls->ctx_tbl);
+
+    DBG_OUT("_tlocal_add_ctx: tls = %p, ctx_rec = %p, winfo = %p\n",
+            (void *)tls, (void *)&tls->ctx_tbl[i],
+            (void *)tls->ctx_tbl[i]->winfo);
 
     /* All good - return the record */
     return tls->ctx_tbl[i];
@@ -1048,31 +1124,36 @@ static int _tlocal_ctx_connect(_tlocal_ctx_t *ctx_rec, int target)
     return OPAL_SUCCESS;
 }
 
-static int _tlocal_ctx_release(opal_common_ucx_ctx_t *ctx)
+static void
+_tlocal_ctx_release(opal_common_ucx_ctx_t *ctx)
 {
     _tlocal_table_t * tls = _tlocal_get_tls(ctx->wpool);
     _tlocal_ctx_t *ctx_rec = _tlocal_ctx_search(tls, ctx->ctx_id);
-    int rc = OPAL_SUCCESS;
+    _worker_info_t *winfo = NULL;
+
+    DBG_OUT("_tlocal_ctx_release: ctx = %p ctx_rec = %p, winfo = %p\n",
+            (void *)ctx, (void *)ctx_rec, (void *)winfo);
 
     if (NULL == ctx_rec) {
         /* we haven't participated in this context */
-        return OPAL_SUCCESS;
+        return;
     }
+    winfo = ctx_rec->winfo;
 
-    /* May free the ctx structure. Do not use it */
+    /* May free the ctx structure. Do not use it afterwards*/
     _common_ucx_ctx_remove(ctx, ctx_rec);
-    DBG_OUT("_tlocal_ctx_release(after _common_ucx_ctx_remove): ctx = %p ctx_rec = %p\n",
-    		(void *)ctx, (void *)ctx_rec);
-    rc = _wpool_idle_put(tls->wpool, ctx_rec->winfo);
-    DBG_OUT("_tlocal_ctx_release(after _wpool_add_to_idle): wpool = %p winfo = %p\n",
-    		(void *)tls->wpool, (void *)ctx_rec->winfo);
+
+    /* Mark winfo as released so wpool progress will garbage-collect it later */
+    opal_mutex_lock(&winfo->mutex);
+    winfo->released = 1;
+    opal_mutex_unlock(&winfo->mutex);
 
     ctx_rec->ctx_id = 0;
     ctx_rec->is_freed = 0;
     ctx_rec->gctx = NULL;
     ctx_rec->winfo = NULL;
 
-    return rc;
+    DBG_OUT("_tlocal_ctx_release: done\n");
 }
 
 static inline _tlocal_mem_t *
@@ -1484,7 +1565,7 @@ opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
                           opal_common_ucx_flush_scope_t scope,
                           int target)
 {
-    _worker_list_item_t *item;
+    _ctx_record_list_item_t *item;
     opal_common_ucx_ctx_t *ctx = mem->ctx;
     int rc = OPAL_SUCCESS;
 
@@ -1492,7 +1573,7 @@ opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
 
     // TODO: make this as a read lock
     opal_mutex_lock(&ctx->mutex);
-    OPAL_LIST_FOREACH(item, &ctx->workers, _worker_list_item_t) {
+    OPAL_LIST_FOREACH(item, &ctx->workers, _ctx_record_list_item_t) {
         switch (scope) {
         case OPAL_COMMON_UCX_SCOPE_WORKER:
             opal_mutex_lock(&item->ptr->winfo->mutex);
@@ -1526,21 +1607,9 @@ opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
     return rc;
 }
 
-OPAL_DECLSPEC
-int opal_common_ucx_workers_progress(opal_common_ucx_wpool_t *wpool) {
-    // TODO
-    static int enter = 0;
-    if (enter == 0) {
-        DBG_OUT("opal_common_ucx_workres_progress: wpool = %p\n", (void *)wpool);
-    }
-
-    enter++;
-    return OPAL_SUCCESS;
-}
-
-
 OPAL_DECLSPEC int
 opal_common_ucx_mem_fence(opal_common_ucx_mem_t *mem) {
     /* TODO */
     return OPAL_SUCCESS;
 }
+

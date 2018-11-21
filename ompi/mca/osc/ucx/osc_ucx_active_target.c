@@ -147,7 +147,7 @@ int ompi_osc_ucx_start(struct ompi_group_t *group, int assert, struct ompi_win_t
 
                 ompi_osc_ucx_handle_incoming_post(module, &(module->state.post_state[i]), ranks_in_win_grp, size);
             }
-            opal_common_ucx_workers_progress(mca_osc_ucx_component.wpool);
+            opal_common_ucx_wpool_progress(mca_osc_ucx_component.wpool);
         }
 
         module->post_count = 0;
@@ -306,7 +306,7 @@ int ompi_osc_ucx_wait(struct ompi_win_t *win) {
 
     while (module->state.complete_count != (uint64_t)size) {
         /* not sure if this is required */
-        opal_common_ucx_workers_progress(mca_osc_ucx_component.wpool);
+        opal_common_ucx_wpool_progress(mca_osc_ucx_component.wpool);
     }
 
     module->state.complete_count = 0;
