@@ -221,6 +221,7 @@ typedef struct {
     /* Ref counting & locking*/
     int refcnt;
     opal_mutex_t mutex;
+    //pthread_rwlock_t rwlock;
 
     /* UCX data */
     ucp_context_h ucp_ctx;
@@ -242,7 +243,8 @@ typedef struct {
 
 typedef struct {
     int ctx_id;
-    opal_mutex_t mutex;
+    //opal_mutex_t mutex;
+    pthread_rwlock_t rwlock;
 
     /* the reference to a Worker pool this context belongs to*/
     opal_common_ucx_wpool_t *wpool;

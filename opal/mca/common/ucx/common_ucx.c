@@ -483,7 +483,7 @@ void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
     }
     OBJ_DESTRUCT(&wpool->active_workers);
 
-    OBJ_DESTRUCT(&wpool->mutex);
+    //OBJ_DESTRUCT(&wpool->mutex);
     ucp_cleanup(wpool->ucp_ctx);
     DBG_OUT("opal_common_ucx_wpool_finalize: wpool = %p\n", (void *)wpool);
     return;
@@ -599,12 +599,18 @@ opal_common_ucx_wpctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
                              opal_common_ucx_ctx_t **ctx_ptr)
 {
     opal_common_ucx_ctx_t *ctx = calloc(1, sizeof(*ctx));
+    pthread_rwlockattr_t attr;
     int ret = OPAL_SUCCESS;
 
     ctx->ctx_id = OPAL_ATOMIC_ADD_FETCH32(&wpool->cur_ctxid, 1);
     DBG_OUT("ctx_create: ctx_id = %d\n", (int)ctx->ctx_id);
 
-    OBJ_CONSTRUCT(&ctx->mutex, opal_mutex_t);
+    //OBJ_CONSTRUCT(&ctx->mutex, opal_mutex_t);
+    // TODO: check return codes
+    pthread_rwlockattr_init(&attr);
+    pthread_rwlock_init(&ctx->rwlock, &attr);
+    pthread_rwlockattr_destroy(&attr);
+
     OBJ_CONSTRUCT(&ctx->tls_workers, opal_list_t);
     ctx->released = 0;
     ctx->wpool = wpool;
@@ -624,7 +630,7 @@ opal_common_ucx_wpctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
             (void *)wpool, (void *)(*ctx_ptr));
     return ret;
 error:
-    OBJ_DESTRUCT(&ctx->mutex);
+    //OBJ_DESTRUCT(&ctx->mutex);
     OBJ_DESTRUCT(&ctx->tls_workers);
     free(ctx);
     (*ctx_ptr) = NULL;
@@ -646,7 +652,10 @@ opal_common_ucx_wpctx_release(opal_common_ucx_ctx_t *ctx)
      * If Worker pool will be destroyed earlier - wpool filalize
      * will take care of this.
      */
-    opal_mutex_lock(&ctx->mutex);
+
+    //opal_mutex_lock(&ctx->mutex);
+    pthread_rwlock_rdlock(&ctx->rwlock);
+
     /* Mark that this function has been called */
     ctx->released = 1;
     /* Go over all TLS subscribed to this context and mark
@@ -658,7 +667,10 @@ opal_common_ucx_wpctx_release(opal_common_ucx_ctx_t *ctx)
     if (0 == opal_list_get_size(&ctx->tls_workers)) {
         can_free = 1;
     }
-    opal_mutex_unlock(&ctx->mutex);
+
+    //opal_mutex_unlock(&ctx->mutex);
+    pthread_rwlock_unlock(&ctx->rwlock);
+
 
     if (can_free) {
         _common_ucx_wpctx_free(ctx);
@@ -672,7 +684,7 @@ _common_ucx_wpctx_free(opal_common_ucx_ctx_t *ctx)
 {
     free(ctx->recv_worker_addrs);
     free(ctx->recv_worker_displs);
-    OBJ_DESTRUCT(&ctx->mutex);
+    //OBJ_DESTRUCT(&ctx->mutex);
     OBJ_DESTRUCT(&ctx->tls_workers);
     DBG_OUT("_common_ucx_ctx_free: ctx = %p\n", (void *)ctx);
     free(ctx);
@@ -687,9 +699,13 @@ _common_ucx_wpctx_append(opal_common_ucx_ctx_t *ctx, _tlocal_ctx_t *ctx_rec)
         return OPAL_ERR_OUT_OF_RESOURCE;
     }
     item->ptr = ctx_rec;
-    opal_mutex_lock(&ctx->mutex);
+
+    //opal_mutex_lock(&ctx->mutex);
+    pthread_rwlock_wrlock(&ctx->rwlock);
     opal_list_append(&ctx->tls_workers, &item->super);
-    opal_mutex_unlock(&ctx->mutex);
+    //opal_mutex_unlock(&ctx->mutex);
+    pthread_rwlock_unlock(&ctx->rwlock);
+
     DBG_OUT("_common_ucx_ctx_append: ctx = %p, ctx_rec = %p\n",
             (void *)ctx, (void *)ctx_rec);
     return OPAL_SUCCESS;
@@ -702,7 +718,9 @@ _common_ucx_wpctx_remove(opal_common_ucx_ctx_t *ctx, _tlocal_ctx_t *ctx_rec)
     int can_free = 0;
     _ctx_record_list_item_t *item = NULL, *next;
 
-    opal_mutex_lock(&ctx->mutex);
+    // opal_mutex_lock(&ctx->mutex);
+    pthread_rwlock_wrlock(&ctx->rwlock);
+
     OPAL_LIST_FOREACH_SAFE(item, next, &ctx->tls_workers,
                            _ctx_record_list_item_t) {
         if (ctx_rec == item->ptr) {
@@ -714,7 +732,8 @@ _common_ucx_wpctx_remove(opal_common_ucx_ctx_t *ctx, _tlocal_ctx_t *ctx_rec)
     if (0 == opal_list_get_size(&ctx->tls_workers) && ctx->released) {
         can_free = 1;
     }
-    opal_mutex_unlock(&ctx->mutex);
+    //opal_mutex_unlock(&ctx->mutex);
+    pthread_rwlock_unlock(&ctx->rwlock);
 
     if (can_free) {
         /* All references to this data structure are removed
@@ -1438,7 +1457,9 @@ opal_common_ucx_wpmem_flush(opal_common_ucx_wpmem_t *mem,
     DBG_OUT("opal_common_ucx_mem_flush: mem = %p, target = %d\n", (void *)mem, target);
 
     // TODO: make this as a read lock
-    opal_mutex_lock(&ctx->mutex);
+    //opal_mutex_lock(&ctx->mutex);
+    pthread_rwlock_rdlock(&ctx->rwlock);
+
     OPAL_LIST_FOREACH(item, &ctx->tls_workers, _ctx_record_list_item_t) {
         switch (scope) {
         case OPAL_COMMON_UCX_SCOPE_WORKER:
@@ -1468,7 +1489,8 @@ opal_common_ucx_wpmem_flush(opal_common_ucx_wpmem_t *mem,
             }
         }
     }
-    opal_mutex_unlock(&ctx->mutex);
+    //opal_mutex_unlock(&ctx->mutex);
+    pthread_rwlock_unlock(&ctx->rwlock);
 
     return rc;
 }
