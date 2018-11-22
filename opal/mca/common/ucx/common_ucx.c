@@ -274,6 +274,7 @@ _winfo_create(opal_common_ucx_wpool_t *wpool)
     winfo->released = 0;
 
     DBG_OUT("_winfo_create: worker = %p\n", (void *)worker);
+    return winfo;
 
 release_worker:
     ucp_worker_destroy(worker);
