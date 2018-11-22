@@ -386,7 +386,6 @@ opal_common_ucx_tlocal_fetch(opal_common_ucx_wpmem_t *mem, int target,
 
     /* First check the fast-path */
     fp = pthread_getspecific(mem->mem_tls_key);
-    MCA_COMMON_UCX_ASSERT(NULL != fp);
     expr = fp && (NULL != fp->winfo) && (fp->winfo->endpoints[target]) &&
             (NULL != fp->rkeys[target]);
     if (OPAL_UNLIKELY(!expr)) {
