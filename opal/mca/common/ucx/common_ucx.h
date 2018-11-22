@@ -387,8 +387,8 @@ opal_common_ucx_tlocal_fetch(opal_common_ucx_wpmem_t *mem, int target,
     /* First check the fast-path */
     fp = pthread_getspecific(mem->mem_tls_key);
     MCA_COMMON_UCX_ASSERT(NULL != fp);
-    expr = (NULL != fp->winfo) && (fp->winfo->endpoints[target])
-            && (NULL != fp->rkeys[target]);
+    expr = fp && (NULL != fp->winfo) && (fp->winfo->endpoints[target]) &&
+            (NULL != fp->rkeys[target]);
     if (OPAL_UNLIKELY(!expr)) {
         rc = opal_common_ucx_tlocal_fetch_spath(mem, target);
         if (OPAL_SUCCESS != rc) {
@@ -396,7 +396,8 @@ opal_common_ucx_tlocal_fetch(opal_common_ucx_wpmem_t *mem, int target,
         }
         fp = pthread_getspecific(mem->mem_tls_key);
     }
-    MCA_COMMON_UCX_ASSERT((NULL != fp->winfo) && (fp->winfo->endpoints[target])
+    MCA_COMMON_UCX_ASSERT(fp && (NULL != fp->winfo) &&
+                          (fp->winfo->endpoints[target])
                           && (NULL != fp->rkeys[target]));
 
     *_rkey = fp->rkeys[target];
