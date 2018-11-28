@@ -24,6 +24,8 @@
     memcpy(((char*)(_dst)) + (_off), _src, _len); \
     (_off) += (_len);
 
+static int dbg_level = 0;
+
 static int component_open(void);
 static int component_register(void);
 static int component_init(bool enable_progress_threads, bool enable_mpi_threads);
@@ -559,7 +561,7 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
     ompi_osc_ucx_module_t *module = (ompi_osc_ucx_module_t*) win->w_osc_module;
     int ret;
 
-    DBG_OUT("ompi_osc_ucx_free: start, mem = %p lock flag = %d\n",
+    DBG_OUT(dbg_level, "start, mem = %p lock flag = %d\n",
             (void *)module->mem, (int)module->state.lock);
 
     assert(module->global_ops_num == 0);
@@ -570,7 +572,7 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
 
     opal_common_ucx_wpmem_flush(module->mem, OPAL_COMMON_UCX_SCOPE_WORKER, 0);
 
-    DBG_OUT("ompi_osc_ucx_free: after mem_flush, mem = %p lock flag = %d\n",
+    DBG_OUT(dbg_level, "after mem_flush, mem = %p lock flag = %d\n",
             (void *)module->mem, (int)module->state.lock);
 
     /*
@@ -582,7 +584,7 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
     ret = module->comm->c_coll->coll_barrier(module->comm,
                                              module->comm->c_coll->coll_barrier_module);
 
-    DBG_OUT("ompi_osc_ucx_free: after barrier, mem = %p\n", (void *)module->mem);
+    DBG_OUT(dbg_level, "after barrier, mem = %p\n", (void *)module->mem);
 
 /*
     for (i = 0; i < ompi_comm_size(module->comm); i++) {
