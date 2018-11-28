@@ -561,8 +561,8 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
     ompi_osc_ucx_module_t *module = (ompi_osc_ucx_module_t*) win->w_osc_module;
     int ret;
 
-    DBG_OUT(dbg_level, "start, mem = %p lock flag = %d\n",
-            (void *)module->mem, (int)module->state.lock);
+    WPOOL_DBG_OUT(dbg_level, "start, mem = %p lock flag = %d\n",
+                  (void *)module->mem, (int)module->state.lock);
 
     assert(module->global_ops_num == 0);
     assert(module->lock_count == 0);
@@ -572,8 +572,8 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
 
     opal_common_ucx_wpmem_flush(module->mem, OPAL_COMMON_UCX_SCOPE_WORKER, 0);
 
-    DBG_OUT(dbg_level, "after mem_flush, mem = %p lock flag = %d\n",
-            (void *)module->mem, (int)module->state.lock);
+    WPOOL_DBG_OUT(dbg_level, "after mem_flush, mem = %p lock flag = %d\n",
+                  (void *)module->mem, (int)module->state.lock);
 
     /*
     while (module->state.lock != TARGET_LOCK_UNLOCKED) {
@@ -584,7 +584,7 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
     ret = module->comm->c_coll->coll_barrier(module->comm,
                                              module->comm->c_coll->coll_barrier_module);
 
-    DBG_OUT(dbg_level, "after barrier, mem = %p\n", (void *)module->mem);
+    WPOOL_DBG_OUT(dbg_level, "after barrier, mem = %p\n", (void *)module->mem);
 
 /*
     for (i = 0; i < ompi_comm_size(module->comm); i++) {

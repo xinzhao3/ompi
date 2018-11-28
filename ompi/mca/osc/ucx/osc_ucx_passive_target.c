@@ -33,7 +33,8 @@ static inline int start_shared(ompi_osc_ucx_module_t *module, int target) {
             return ret;
         }
 
-        DBG_OUT(dbg_level, "start_shared: after fadd, result_value = %d", (int)result_value);
+        WPOOL_DBG_OUT(dbg_level, "start_shared: after fadd, result_value = %d",
+                      (int)result_value);
 
         assert((int64_t)result_value >= 0);
         if (result_value >= TARGET_LOCK_EXCLUSIVE) {
@@ -225,7 +226,7 @@ int ompi_osc_ucx_unlock_all(struct ompi_win_t *win) {
     int comm_size = ompi_comm_size(module->comm);
     int ret = OMPI_SUCCESS;
 
-    DBG_OUT(dbg_level, "start, mem = %p\n", (void *)module->mem);
+    WPOOL_DBG_OUT(dbg_level, "start, mem = %p\n", (void *)module->mem);
 
     if (module->epoch_type.access != PASSIVE_ALL_EPOCH) {
         return OMPI_ERR_RMA_SYNC;
@@ -238,8 +239,8 @@ int ompi_osc_ucx_unlock_all(struct ompi_win_t *win) {
         return ret;
     }
 
-    DBG_OUT(dbg_level, "done flushing: mem = %p\n",
-            (void *)module->mem);
+    WPOOL_DBG_OUT(dbg_level, "done flushing: mem = %p\n",
+                  (void *)module->mem);
 
     module->global_ops_num = 0;
     memset(module->per_target_ops_nums, 0, sizeof(int) * comm_size);
@@ -253,8 +254,8 @@ int ompi_osc_ucx_unlock_all(struct ompi_win_t *win) {
 
     module->epoch_type.access = NONE_EPOCH;
 
-    DBG_OUT(dbg_level, "fini: mem = %p\n",
-            (void *)module->mem);
+    WPOOL_DBG_OUT(dbg_level, "fini: mem = %p\n",
+                  (void *)module->mem);
 
     return ret;
 }
