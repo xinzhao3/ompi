@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 #include <ucp/api/ucp.h>
+#include <pthread.h>
 
 #include "opal/mca/mca.h"
 #include "opal/util/output.h"
@@ -96,6 +97,150 @@ typedef struct opal_common_ucx_del_proc {
 
 extern opal_common_ucx_module_t opal_common_ucx;
 
+typedef struct {
+    int refcnt;
+    ucp_context_h ucp_ctx;
+    opal_mutex_t mutex;
+    opal_list_t idle_workers;
+    ucp_worker_h recv_worker;
+    ucp_address_t *recv_waddr;
+    size_t recv_waddr_len;
+    opal_atomic_int32_t cur_ctxid, cur_memid;
+    opal_list_t tls_list;
+} opal_common_ucx_wpool_t;
+
+typedef struct {
+    opal_atomic_int32_t ctx_id;
+    opal_mutex_t mutex;
+    opal_common_ucx_wpool_t *wpool; /* which wpool this ctx belongs to */
+    opal_list_t workers; /* active worker lists */
+    char *recv_worker_addrs;
+    int *recv_worker_displs;
+    size_t comm_size;
+} opal_common_ucx_ctx_t;
+
+typedef struct {
+    opal_atomic_int32_t mem_id;
+    opal_mutex_t mutex;
+    opal_common_ucx_ctx_t *ctx; /* which ctx this mem_reg belongs to */
+    ucp_mem_h memh;
+    opal_list_t registrations; /* mem region lists */
+    char *mem_addrs;
+    int *mem_displs;
+} opal_common_ucx_mem_t;
+
+typedef enum {
+    OPAL_COMMON_UCX_PUT,
+    OPAL_COMMON_UCX_GET
+} opal_common_ucx_op_t;
+
+typedef enum {
+    OPAL_COMMON_UCX_SCOPE_EP,
+    OPAL_COMMON_UCX_SCOPE_WORKER
+} opal_common_ucx_flush_scope_t;
+
+typedef enum {
+    OPAL_COMMON_UCX_MEM_ALLOCATE_MAP,
+    OPAL_COMMON_UCX_MEM_MAP
+} opal_common_ucx_mem_type_t;
+
+typedef int (*opal_common_ucx_exchange_func_t)(void *my_info, size_t my_info_len,
+                                               char **recv_info, int **disps,
+                                               void *metadata);
+
+OPAL_DECLSPEC opal_common_ucx_wpool_t * opal_common_ucx_wpool_allocate(void);
+OPAL_DECLSPEC void opal_common_ucx_wpool_free(opal_common_ucx_wpool_t *wpool);
+OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
+                                             int proc_world_size,
+                                             ucp_request_init_callback_t req_init_ptr,
+                                             size_t req_size, bool enable_mt);
+OPAL_DECLSPEC void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool);
+OPAL_DECLSPEC int opal_common_ucx_ctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
+                                             opal_common_ucx_exchange_func_t exchange_func,
+                                             void *exchange_metadata,
+                                             opal_common_ucx_ctx_t **ctx_ptr);
+OPAL_DECLSPEC void opal_common_ucx_ctx_release(opal_common_ucx_ctx_t *ctx);
+OPAL_DECLSPEC int opal_common_ucx_mem_create(opal_common_ucx_ctx_t *ctx, int comm_size,
+                                             void **mem_base, size_t mem_size,
+                                             opal_common_ucx_mem_type_t mem_type,
+                                             opal_common_ucx_exchange_func_t exchange_func,
+                                             void *exchange_metadata,
+                                             opal_common_ucx_mem_t **mem_ptr);
+OPAL_DECLSPEC int opal_common_ucx_mem_flush(opal_common_ucx_mem_t *mem,
+                                            opal_common_ucx_flush_scope_t scope,
+                                            int target);
+OPAL_DECLSPEC int opal_common_ucx_mem_fetch_nb(opal_common_ucx_mem_t *mem,
+                                               ucp_atomic_fetch_op_t opcode,
+                                               uint64_t value,
+                                               int target, void *buffer, size_t len,
+                                               uint64_t rem_addr, ucs_status_ptr_t *ptr);
+OPAL_DECLSPEC int opal_common_ucx_mem_fence(opal_common_ucx_mem_t *mem);
+OPAL_DECLSPEC int opal_common_ucx_workers_progress(opal_common_ucx_wpool_t *wpool);
+OPAL_DECLSPEC int opal_common_ucx_mem_cmpswp(opal_common_ucx_mem_t *mem,
+                                             uint64_t compare, uint64_t value,
+                                             int target,
+                                             void *buffer, size_t len,
+                                             uint64_t rem_addr);
+OPAL_DECLSPEC int opal_common_ucx_mem_putget(opal_common_ucx_mem_t *mem,
+                                         opal_common_ucx_op_t op,
+                                         int target,
+                                         void *buffer, size_t len,
+                                         uint64_t rem_addr);
+OPAL_DECLSPEC int opal_common_ucx_mem_fetch(opal_common_ucx_mem_t *mem,
+                                            ucp_atomic_fetch_op_t opcode, uint64_t value,
+                                            int target,
+                                            void *buffer, size_t len,
+                                            uint64_t rem_addr);
+OPAL_DECLSPEC int opal_common_ucx_mem_post(opal_common_ucx_mem_t *mem,
+                                            ucp_atomic_post_op_t opcode,
+                                           uint64_t value,
+                                            int target,
+                                            size_t len,
+                                            uint64_t rem_addr);
+
+#define FDBG
+#ifdef FDBG
+extern __thread FILE *tls_pf;
+extern __thread int initialized;
+
+#include  <unistd.h>
+#include <sys/syscall.h>
+#include <time.h>
+#include <sys/time.h>
+
+static inline void init_tls_dbg(void)
+{
+    if( !initialized ) {
+        int tid = syscall(__NR_gettid);
+        char hname[128];
+        gethostname(hname, 127);
+        char fname[128];
+
+        sprintf(fname, "%s.%d.log", hname, tid);
+        tls_pf = fopen(fname, "w");
+        initialized = 1;
+    }
+}
+
+#define DBG_OUT(...)                \
+{                                   \
+    struct timeval start_;          \
+    time_t nowtime_;                \
+    struct tm *nowtm_;              \
+    char tmbuf_[64];                \
+    gettimeofday(&start_, NULL);    \
+    nowtime_ = start_.tv_sec;       \
+    nowtm_ = localtime(&nowtime_);  \
+    strftime(tmbuf_, sizeof(tmbuf_), "%H:%M:%S", nowtm_); \
+    init_tls_dbg();                 \
+    fprintf(tls_pf, "[%s.%06ld] ", tmbuf_, start_.tv_usec);\
+    fprintf(tls_pf, __VA_ARGS__);    \
+}
+
+#else
+#define DBG_OUT(...)
+#endif
+
 OPAL_DECLSPEC void opal_common_ucx_mca_register(void);
 OPAL_DECLSPEC void opal_common_ucx_mca_deregister(void);
 OPAL_DECLSPEC void opal_common_ucx_empty_complete_cb(void *request, ucs_status_t status);
@@ -166,6 +311,16 @@ int opal_common_ucx_worker_flush(ucp_worker_h worker)
 }
 
 static inline
+ucs_status_ptr_t opal_common_ucx_atomic_fetch_nb(ucp_ep_h ep, ucp_atomic_fetch_op_t opcode,
+                                                 uint64_t value, void *result, size_t op_size,
+                                                 uint64_t remote_addr, ucp_rkey_h rkey,
+                                                 ucp_worker_h worker)
+{
+    return ucp_atomic_fetch_nb(ep, opcode, value, result, op_size,
+                               remote_addr, rkey, opal_common_ucx_empty_complete_cb);
+}
+
+static inline
 int opal_common_ucx_atomic_fetch(ucp_ep_h ep, ucp_atomic_fetch_op_t opcode,
                                  uint64_t value, void *result, size_t op_size,
                                  uint64_t remote_addr, ucp_rkey_h rkey,
@@ -173,8 +328,8 @@ int opal_common_ucx_atomic_fetch(ucp_ep_h ep, ucp_atomic_fetch_op_t opcode,
 {
     ucs_status_ptr_t request;
 
-    request = ucp_atomic_fetch_nb(ep, opcode, value, result, op_size,
-                                  remote_addr, rkey, opal_common_ucx_empty_complete_cb);
+    request = opal_common_ucx_atomic_fetch_nb(ep, opcode, value, result, op_size,
+                                              remote_addr, rkey, worker);
     return opal_common_ucx_wait_request(request, worker, "ucp_atomic_fetch_nb");
 }
 
