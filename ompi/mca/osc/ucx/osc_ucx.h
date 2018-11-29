@@ -22,7 +22,7 @@
 
 #define OMPI_OSC_UCX_POST_PEER_MAX 32
 #define OMPI_OSC_UCX_ATTACH_MAX    32
-#define OMPI_OSC_UCX_RKEY_BUF_MAX  1024
+#define OMPI_OSC_UCX_MEM_ADDR_MAX_LEN  1024
 
 typedef struct ompi_osc_ucx_component {
     ompi_osc_base_component_t super;
@@ -68,11 +68,13 @@ typedef struct ompi_osc_ucx_epoch_type {
 typedef struct ompi_osc_dynamic_win_info {
     uint64_t base;
     size_t size;
-    char rkey_buffer[OMPI_OSC_UCX_RKEY_BUF_MAX];
+    char mem_addr[OMPI_OSC_UCX_MEM_ADDR_MAX_LEN];
 } ompi_osc_dynamic_win_info_t;
 
 typedef struct ompi_osc_local_dynamic_win_info {
-    ucp_mem_h memh;
+    opal_common_ucx_wpmem_t *mem;
+    char *my_mem_addr;
+    int my_mem_addr_size;
     int refcnt;
 } ompi_osc_local_dynamic_win_info_t;
 

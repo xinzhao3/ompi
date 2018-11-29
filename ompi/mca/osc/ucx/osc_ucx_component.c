@@ -20,6 +20,8 @@
 #include "osc_ucx.h"
 #include "osc_ucx_request.h"
 
+#define UCX_VERSION(_major, _minor, _build) (((_major) * 100) + (_minor))
+
 #define memcpy_off(_dst, _src, _len, _off)        \
     memcpy(((char*)(_dst)) + (_off), _src, _len); \
     (_off) += (_len);
@@ -106,6 +108,9 @@ static int component_open(void) {
 }
 
 static int component_register(void) {
+    unsigned major          = 0;
+    unsigned minor          = 0;
+    unsigned release_number = 0;
     char *description_str;
 
     ucp_get_version(&major, &minor, &release_number);
@@ -211,6 +216,8 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
     void *state_base = NULL;
     opal_common_ucx_mem_type_t mem_type;
     uint64_t zero = 0;
+    char *my_mem_addr;
+    int my_mem_addr_size;
     void * my_info = NULL;
     char *recv_buf = NULL;
 
@@ -322,7 +329,9 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
 
         ret = opal_common_ucx_wpmem_create(module->ctx, base, size,
                                          mem_type, &exchange_len_info,
-                                         (void *)module->comm, &module->mem);
+                                         (void *)module->comm,
+                                           &my_mem_addr, &my_mem_addr_size,
+                                           &module->mem);
         if (ret != OMPI_SUCCESS) {
             goto error;
         }
@@ -333,7 +342,9 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
     ret = opal_common_ucx_wpmem_create(module->ctx, &state_base,
                                      sizeof(ompi_osc_ucx_state_t),
                                      OPAL_COMMON_UCX_MEM_MAP, &exchange_len_info,
-                                     (void *)module->comm, &module->state_mem);
+                                     (void *)module->comm,
+                                       &my_mem_addr, &my_mem_addr_size,
+                                       &module->state_mem);
     if (ret != OMPI_SUCCESS) {
         goto error;
     }
@@ -457,13 +468,9 @@ int ompi_osc_find_attached_region_position(ompi_osc_dynamic_win_info_t *dynamic_
 }
 
 int ompi_osc_ucx_win_attach(struct ompi_win_t *win, void *base, size_t len) {
-/*
     ompi_osc_ucx_module_t *module = (ompi_osc_ucx_module_t*) win->w_osc_module;
     int insert_index = -1, contain_index;
-    void *rkey_buffer;
-    size_t rkey_buffer_size;
     int ret = OMPI_SUCCESS;
-    ucs_status_t status;
 
     if (module->state.dynamic_win_count >= OMPI_OSC_UCX_ATTACH_MAX) {
         return OMPI_ERR_TEMP_OUT_OF_RESOURCE;
@@ -488,10 +495,14 @@ int ompi_osc_ucx_win_attach(struct ompi_win_t *win, void *base, size_t len) {
                 (OMPI_OSC_UCX_ATTACH_MAX - (insert_index + 1)) * sizeof(ompi_osc_dynamic_win_info_t));
     } else {
         insert_index = 0;
-    }*/
-/*
-    ret = mem_map(&base, len, &(module->local_dynamic_win_info[insert_index].memh),
-                  module, MPI_WIN_FLAVOR_CREATE);
+    }
+
+    ret = opal_common_ucx_wpmem_create(module->ctx, &base, len,
+                                       OPAL_COMMON_UCX_MEM_MAP, &exchange_len_info,
+                                       (void *)module->comm,
+                                       &(module->local_dynamic_win_info[insert_index].my_mem_addr),
+                                       &(module->local_dynamic_win_info[insert_index].my_mem_addr_size),
+                                       &(module->local_dynamic_win_info[insert_index].mem));
     if (ret != OMPI_SUCCESS) {
         return ret;
     }
@@ -499,32 +510,20 @@ int ompi_osc_ucx_win_attach(struct ompi_win_t *win, void *base, size_t len) {
     module->state.dynamic_wins[insert_index].base = (uint64_t)base;
     module->state.dynamic_wins[insert_index].size = len;
 
-    status = ucp_rkey_pack(mca_osc_ucx_component.ucp_context,
-                           module->local_dynamic_win_info[insert_index].memh,
-                           &rkey_buffer, (size_t *)&rkey_buffer_size);
-    if (status != UCS_OK) {
-        OSC_UCX_VERBOSE(1, "ucp_rkey_pack failed: %d", status);
-        return OMPI_ERROR;
-    }
-
-    assert(rkey_buffer_size <= OMPI_OSC_UCX_RKEY_BUF_MAX);
-    memcpy((char *)(module->state.dynamic_wins[insert_index].rkey_buffer),
-           (char *)rkey_buffer, rkey_buffer_size);
+    memcpy((char *)(module->state.dynamic_wins[insert_index].mem_addr),
+           (char *)module->local_dynamic_win_info[insert_index].my_mem_addr,
+           module->local_dynamic_win_info[insert_index].my_mem_addr_size);
 
     module->local_dynamic_win_info[insert_index].refcnt++;
     module->state.dynamic_win_count++;
 
-    ucp_rkey_buffer_release(rkey_buffer);
-
     return ret;
-    */
-    return OMPI_SUCCESS;
 }
 
 int ompi_osc_ucx_win_detach(struct ompi_win_t *win, const void *base) {
-/*
     ompi_osc_ucx_module_t *module = (ompi_osc_ucx_module_t*) win->w_osc_module;
     int insert, contain;
+    int ret = OMPI_SUCCESS;
 
     assert(module->state.dynamic_win_count > 0);
 
@@ -533,15 +532,14 @@ int ompi_osc_ucx_win_detach(struct ompi_win_t *win, const void *base) {
                                                      (uint64_t)base, 1, &insert);
     assert(contain >= 0 && (uint64_t)contain < module->state.dynamic_win_count);
 
-    // if we can't find region - just exit
+    /* if we can't find region - just exit */
     if (contain < 0) {
         return OMPI_SUCCESS;
     }
 
     module->local_dynamic_win_info[contain].refcnt--;
     if (module->local_dynamic_win_info[contain].refcnt == 0) {
-        ucp_mem_unmap(mca_osc_ucx_component.ucp_context,
-                      module->local_dynamic_win_info[contain].memh);
+        ret = opal_common_ucx_wpmem_free(module->local_dynamic_win_info[contain].mem);
         memmove((void *)&(module->local_dynamic_win_info[contain]),
                 (void *)&(module->local_dynamic_win_info[contain+1]),
                 (OMPI_OSC_UCX_ATTACH_MAX - (contain + 1)) * sizeof(ompi_osc_local_dynamic_win_info_t));
@@ -552,9 +550,7 @@ int ompi_osc_ucx_win_detach(struct ompi_win_t *win, const void *base) {
         module->state.dynamic_win_count--;
     }
 
-    return OMPI_SUCCESS;
-    */
-    return OMPI_SUCCESS;
+    return ret;
 }
 
 int ompi_osc_ucx_free(struct ompi_win_t *win) {
@@ -583,31 +579,28 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
 
     ret = module->comm->c_coll->coll_barrier(module->comm,
                                              module->comm->c_coll->coll_barrier_module);
+    if (ret != OMPI_SUCCESS) {
+        return ret;
+    }
 
     WPOOL_DBG_OUT(dbg_level, "after barrier, mem = %p\n", (void *)module->mem);
 
-/*
-    for (i = 0; i < ompi_comm_size(module->comm); i++) {
-        if ((module->win_info_array[i]).rkey_init == true) {
-            ucp_rkey_destroy((module->win_info_array[i]).rkey);
-            (module->win_info_array[i]).rkey_init = false;
-        }
-        ucp_rkey_destroy((module->state_info_array[i]).rkey);
-    }
-    free(module->win_info_array);
-    free(module->state_info_array);
-
-    if ((module->flavor == MPI_WIN_FLAVOR_ALLOCATE || module->flavor == MPI_WIN_FLAVOR_CREATE)
-        && module->size > 0) {
-        ucp_mem_unmap(mca_osc_ucx_component.ucp_context, module->memh);
-    }
-    ucp_mem_unmap(mca_osc_ucx_component.ucp_context, module->state_memh);
-
-
-    return ret;
-    */
+    free(module->addrs);
+    free(module->state_addrs);
     free(module->per_target_ops_nums);
 
+    ret = opal_common_ucx_wpmem_free(module->state_mem);
+    if (ret != OMPI_SUCCESS) {
+      return ret;
+    }
+
+    ret = opal_common_ucx_wpmem_free(module->mem);
+    if (ret != OMPI_SUCCESS) {
+      return ret;
+    }
+
+    opal_common_ucx_wpctx_release(module->ctx);
+ 
     opal_common_ucx_wpool_finalize(mca_osc_ucx_component.wpool);
 
     if (module->disp_units) free(module->disp_units);
@@ -616,5 +609,5 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
     free(module);
     ompi_osc_ucx_unregister_progress();
 
-    return OMPI_SUCCESS;
+    return ret;
 }
