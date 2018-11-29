@@ -20,6 +20,8 @@
 #include "osc_ucx.h"
 #include "osc_ucx_request.h"
 
+#define UCX_VERSION(_major, _minor, _build) (((_major) * 100) + (_minor))
+
 #define memcpy_off(_dst, _src, _len, _off)        \
     memcpy(((char*)(_dst)) + (_off), _src, _len); \
     (_off) += (_len);
@@ -106,6 +108,9 @@ static int component_open(void) {
 }
 
 static int component_register(void) {
+    unsigned major          = 0;
+    unsigned minor          = 0;
+    unsigned release_number = 0;
     char *description_str;
 
     ucp_get_version(&major, &minor, &release_number);
