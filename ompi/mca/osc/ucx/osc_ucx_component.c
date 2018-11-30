@@ -242,8 +242,6 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
 
         ret = opal_common_ucx_wpool_init(mca_osc_ucx_component.wpool,
                                          ompi_proc_world_size(),
-                                         internal_req_init,
-                                         sizeof(ompi_osc_ucx_internal_request_t),
                                          mca_osc_ucx_component.enable_mpi_threads);
         if (OMPI_SUCCESS != ret) {
             OSC_UCX_VERBOSE(1, "opal_common_ucx_wpool_init failed: %d", ret);

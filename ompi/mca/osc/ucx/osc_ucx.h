@@ -212,7 +212,4 @@ int ompi_osc_find_attached_region_position(ompi_osc_dynamic_win_info_t *dynamic_
                                            int min_index, int max_index,
                                            uint64_t base, size_t len, int *insert);
 
-void req_completion(void *request, ucs_status_t status);
-void internal_req_init(void *request);
-
 #endif /* OMPI_OSC_UCX_H */
