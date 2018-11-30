@@ -818,7 +818,6 @@ int ompi_osc_ucx_rput(const void *origin_addr, int origin_count,
     ompi_osc_ucx_module_t *module = (ompi_osc_ucx_module_t*) win->w_osc_module;
     uint64_t remote_addr = (module->addrs[target]) + target_disp * OSC_UCX_GET_DISP(module, target);
     ompi_osc_ucx_request_t *ucx_req = NULL;
-    ompi_osc_ucx_internal_request_t *internal_req = NULL;
     int ret = OMPI_SUCCESS;
 
     ret = check_sync_state(module, target, true);
@@ -848,19 +847,13 @@ int ompi_osc_ucx_rput(const void *origin_addr, int origin_count,
         return OMPI_ERROR;
     }
 
+    mca_osc_ucx_component.num_incomplete_req_ops++;
     ret = opal_common_ucx_wpmem_fetch_nb(module->mem, UCP_ATOMIC_FETCH_OP_FADD,
-                                       0, target, &(module->req_result),
-                                       sizeof(uint64_t), remote_addr,
-                                       (ucs_status_ptr_t *)&internal_req);
+                                         0, target, &(module->req_result),
+                                         sizeof(uint64_t), remote_addr,
+                                         req_completion, ucx_req);
     if (ret != OMPI_SUCCESS) {
         return ret;
-    }
-
-    if (UCS_PTR_IS_PTR(internal_req)) {
-        internal_req->external_req = ucx_req;
-        mca_osc_ucx_component.num_incomplete_req_ops++;
-    } else {
-        ompi_request_complete(&ucx_req->super, true);
     }
 
     *request = &ucx_req->super;
@@ -876,7 +869,6 @@ int ompi_osc_ucx_rget(void *origin_addr, int origin_count,
     ompi_osc_ucx_module_t *module = (ompi_osc_ucx_module_t*) win->w_osc_module;
     uint64_t remote_addr = (module->addrs[target]) + target_disp * OSC_UCX_GET_DISP(module, target);
     ompi_osc_ucx_request_t *ucx_req = NULL;
-    ompi_osc_ucx_internal_request_t *internal_req = NULL;
     int ret = OMPI_SUCCESS;
 
     ret = check_sync_state(module, target, true);
@@ -906,19 +898,13 @@ int ompi_osc_ucx_rget(void *origin_addr, int origin_count,
         return OMPI_ERROR;
     }
 
+    mca_osc_ucx_component.num_incomplete_req_ops++;
     ret = opal_common_ucx_wpmem_fetch_nb(module->mem, UCP_ATOMIC_FETCH_OP_FADD,
-                                       0, target, &(module->req_result),
-                                       sizeof(uint64_t), remote_addr,
-                                       (ucs_status_ptr_t *)&internal_req);
+                                         0, target, &(module->req_result),
+                                         sizeof(uint64_t), remote_addr,
+                                         req_completion, ucx_req);
     if (ret != OMPI_SUCCESS) {
         return ret;
-    }
-
-    if (UCS_PTR_IS_PTR(internal_req)) {
-        internal_req->external_req = ucx_req;
-        mca_osc_ucx_component.num_incomplete_req_ops++;
-    } else {
-        ompi_request_complete(&ucx_req->super, true);
     }
 
     *request = &ucx_req->super;

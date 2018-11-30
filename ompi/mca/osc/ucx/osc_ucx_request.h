@@ -22,10 +22,6 @@ typedef struct ompi_osc_ucx_request {
 
 OBJ_CLASS_DECLARATION(ompi_osc_ucx_request_t);
 
-typedef struct ompi_osc_ucx_internal_request {
-    ompi_osc_ucx_request_t *external_req;
-} ompi_osc_ucx_internal_request_t;
-
 #define OMPI_OSC_UCX_REQUEST_ALLOC(win, req)                            \
     do {                                                                \
         opal_free_list_item_t *item;                                    \
@@ -51,5 +47,7 @@ typedef struct ompi_osc_ucx_internal_request {
         opal_free_list_return (&mca_osc_ucx_component.requests,         \
                                (opal_free_list_item_t*) req);           \
     } while (0)
+
+void req_completion(void *request);
 
 #endif /* OMPI_OSC_UCX_REQUEST_H */
