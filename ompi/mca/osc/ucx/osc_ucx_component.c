@@ -309,7 +309,7 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
     }
 
     ret = opal_common_ucx_wpctx_create(mca_osc_ucx_component.wpool, comm_size,
-                                     &exchange_len_info, (void *)module->comm,
+                                       exchange_len_info, (void *)module->comm,
                                      &module->ctx);
     if (OMPI_SUCCESS != ret) {
         goto error;
@@ -326,23 +326,24 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
         }
 
         ret = opal_common_ucx_wpmem_create(module->ctx, base, size,
-                                         mem_type, &exchange_len_info,
-                                         (void *)module->comm,
+                                           mem_type, exchange_len_info,
+                                           (void *)module->comm,
                                            &my_mem_addr, &my_mem_addr_size,
                                            &module->mem);
         if (ret != OMPI_SUCCESS) {
             goto error;
         }
-
+        ucp_rkey_buffer_release(my_mem_addr);
     }
 
     state_base = (void *)&(module->state);
     ret = opal_common_ucx_wpmem_create(module->ctx, &state_base,
-                                     sizeof(ompi_osc_ucx_state_t),
-                                     OPAL_COMMON_UCX_MEM_MAP, &exchange_len_info,
-                                     (void *)module->comm,
+                                       sizeof(ompi_osc_ucx_state_t),
+                                       OPAL_COMMON_UCX_MEM_MAP, exchange_len_info,
+                                       (void *)module->comm,
                                        &my_mem_addr, &my_mem_addr_size,
                                        &module->state_mem);
+    ucp_rkey_buffer_release(my_mem_addr);
     if (ret != OMPI_SUCCESS) {
         goto error;
     }
@@ -496,7 +497,7 @@ int ompi_osc_ucx_win_attach(struct ompi_win_t *win, void *base, size_t len) {
     }
 
     ret = opal_common_ucx_wpmem_create(module->ctx, &base, len,
-                                       OPAL_COMMON_UCX_MEM_MAP, &exchange_len_info,
+                                       OPAL_COMMON_UCX_MEM_MAP, exchange_len_info,
                                        (void *)module->comm,
                                        &(module->local_dynamic_win_info[insert_index].my_mem_addr),
                                        &(module->local_dynamic_win_info[insert_index].my_mem_addr_size),

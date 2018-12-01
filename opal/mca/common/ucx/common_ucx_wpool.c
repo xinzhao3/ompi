@@ -408,9 +408,9 @@ opal_common_ucx_wpctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
 
     ctx->recv_worker_addrs = NULL;
     ctx->recv_worker_displs = NULL;
-    ret = exchange_func(wpool->recv_waddr, wpool->recv_waddr_len,
-                        &ctx->recv_worker_addrs,
-                        &ctx->recv_worker_displs, exchange_metadata);
+    ret = (*exchange_func)(wpool->recv_waddr, wpool->recv_waddr_len,
+                           &ctx->recv_worker_addrs,
+                           &ctx->recv_worker_displs, exchange_metadata);
     if (ret != OPAL_SUCCESS) {
         goto error;
     }
@@ -537,10 +537,10 @@ _common_ucx_wpctx_remove(opal_common_ucx_ctx_t *ctx,
 
 OPAL_DECLSPEC
 int opal_common_ucx_wpmem_create(opal_common_ucx_ctx_t *ctx,
-                               void **mem_base, size_t mem_size,
-                               opal_common_ucx_mem_type_t mem_type,
-                               opal_common_ucx_exchange_func_t exchange_func,
-                               void *exchange_metadata,
+                                 void **mem_base, size_t mem_size,
+                                 opal_common_ucx_mem_type_t mem_type,
+                                 opal_common_ucx_exchange_func_t exchange_func,
+                                 void *exchange_metadata,
                                  char **my_mem_addr,
                                  int *my_mem_addr_size,
                                opal_common_ucx_wpmem_t **mem_ptr)
@@ -578,8 +578,8 @@ int opal_common_ucx_wpmem_create(opal_common_ucx_ctx_t *ctx,
     WPOOL_DBG_OUT(_dbg_mem, "\trkey_addr = %p, rkey_addr_len = %d\n",
                   (void *)rkey_addr, (int)rkey_addr_len);
 
-    ret = exchange_func(rkey_addr, rkey_addr_len,
-                        &mem->mem_addrs, &mem->mem_displs, exchange_metadata);
+    ret = (*exchange_func)(rkey_addr, rkey_addr_len,
+                           &mem->mem_addrs, &mem->mem_displs, exchange_metadata);
     WPOOL_DBG_OUT(_dbg_mem, "\tcomplete exchange");
     if (ret != OPAL_SUCCESS) {
         goto error_rkey_pack;
