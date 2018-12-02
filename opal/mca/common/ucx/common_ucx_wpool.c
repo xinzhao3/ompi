@@ -57,7 +57,7 @@ _winfo_create(opal_common_ucx_wpool_t *wpool)
         goto release_worker;
     }
 
-    OBJ_CONSTRUCT(&winfo->mutex, opal_mutex_t);
+    OBJ_CONSTRUCT(&winfo->mutex, opal_recursive_mutex_t);
     winfo->worker = worker;
     winfo->endpoints = NULL;
     winfo->comm_size = 0;
@@ -142,7 +142,7 @@ opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
         return rc;
     }
 
-    OBJ_CONSTRUCT(&wpool->mutex, opal_mutex_t);
+    OBJ_CONSTRUCT(&wpool->mutex, opal_recursive_mutex_t);
     OBJ_CONSTRUCT(&wpool->tls_list, opal_list_t);
 
     status = ucp_config_read("MPI", NULL, &config);
@@ -290,24 +290,24 @@ opal_common_ucx_wpool_progress(opal_common_ucx_wpool_t *wpool)
     /* Go over all active workers and progress them
      * TODO: may want to have some partitioning to progress only part of
      * workers */
-    opal_mutex_lock(&wpool->mutex);
-    OPAL_LIST_FOREACH_SAFE(item, next, &wpool->active_workers,
-                           _winfo_list_item_t) {
-        opal_common_ucx_winfo_t *winfo = item->ptr;
-        opal_mutex_lock(&winfo->mutex);
-        if( OPAL_UNLIKELY(winfo->released) ) {
-            /* Do garbage collection of worker info's if needed */
-            opal_list_remove_item(&wpool->active_workers, &item->super);
-            _winfo_reset(winfo);
-            opal_list_append(&wpool->idle_workers, &item->super);
-        } else {
-            /* Progress worker until there are existing events */
-            while(ucp_worker_progress(winfo->worker));
+    if (!opal_mutex_trylock (&wpool->mutex)) {
+        OPAL_LIST_FOREACH_SAFE(item, next, &wpool->active_workers,
+                               _winfo_list_item_t) {
+            opal_common_ucx_winfo_t *winfo = item->ptr;
+            opal_mutex_lock(&winfo->mutex);
+            if( OPAL_UNLIKELY(winfo->released) ) {
+                /* Do garbage collection of worker info's if needed */
+                opal_list_remove_item(&wpool->active_workers, &item->super);
+                _winfo_reset(winfo);
+                opal_list_append(&wpool->idle_workers, &item->super);
+            } else {
+                /* Progress worker until there are existing events */
+                while(ucp_worker_progress(winfo->worker));
+            }
+            opal_mutex_unlock(&winfo->mutex);
         }
-        opal_mutex_unlock(&winfo->mutex);
+        opal_mutex_unlock(&wpool->mutex);
     }
-
-    opal_mutex_unlock(&wpool->mutex);
 }
 
 static int
@@ -399,7 +399,7 @@ opal_common_ucx_wpctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
 
     WPOOL_DBG_OUT(_dbg_ctx, "ctx_create: ctx = %p\n", (void*)ctx);
 
-    OBJ_CONSTRUCT(&ctx->mutex, opal_mutex_t);
+    OBJ_CONSTRUCT(&ctx->mutex, opal_recursive_mutex_t);
     OBJ_CONSTRUCT(&ctx->tls_workers, opal_list_t);
     ctx->released = 0;
     ctx->refcntr = 1; /* application holding the context */

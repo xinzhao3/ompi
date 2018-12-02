@@ -131,7 +131,7 @@ static int component_register(void) {
 
 static int progress_callback(void) {
     if (mca_osc_ucx_component.wpool != NULL) {
-        ucp_worker_progress(mca_osc_ucx_component.wpool->recv_worker);
+        opal_common_ucx_wpool_progress(mca_osc_ucx_component.wpool);
     }
     return 0;
 }
