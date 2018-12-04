@@ -66,21 +66,6 @@ static inline int check_sync_state(ompi_osc_ucx_module_t *module, int target,
     return OMPI_SUCCESS;
 }
 
-static inline int incr_and_check_ops_num(ompi_osc_ucx_module_t *module, int target) {
-    int status;
-    module->global_ops_num++;
-    module->per_target_ops_nums[target]++;
-    if (module->global_ops_num >= OSC_UCX_OPS_THRESHOLD) {
-        status = opal_common_ucx_wpmem_flush(module->mem, OPAL_COMMON_UCX_SCOPE_EP, target);
-        if (status != OMPI_SUCCESS) {
-            return status;
-        }
-        module->global_ops_num -= module->per_target_ops_nums[target];
-        module->per_target_ops_nums[target] = 0;
-    }
-    return OMPI_SUCCESS;
-}
-
 static inline int create_iov_list(const void *addr, int count, ompi_datatype_t *datatype,
                                   ucx_iovec_t **ucx_iov, uint32_t *ucx_iov_count) {
     int ret = OMPI_SUCCESS;
@@ -179,11 +164,6 @@ static inline int ddt_put_get(ompi_osc_ucx_module_t *module,
                 return OMPI_ERROR;
             }
 
-            ret = incr_and_check_ops_num(module, target);
-            if (ret != OMPI_SUCCESS) {
-                return ret;
-            }
-
             origin_ucx_iov[origin_ucx_iov_idx].addr = (void *)((intptr_t)origin_ucx_iov[origin_ucx_iov_idx].addr + curr_len);
             target_ucx_iov[target_ucx_iov_idx].addr = (void *)((intptr_t)target_ucx_iov[target_ucx_iov_idx].addr + curr_len);
 
@@ -218,11 +198,6 @@ static inline int ddt_put_get(ompi_osc_ucx_module_t *module,
                 return OMPI_ERROR;
             }
 
-            ret = incr_and_check_ops_num(module, target);
-            if (ret != OMPI_SUCCESS) {
-                return ret;
-            }
-
             prev_len += origin_ucx_iov[origin_ucx_iov_idx].len;
             origin_ucx_iov_idx++;
         }
@@ -243,10 +218,6 @@ static inline int ddt_put_get(ompi_osc_ucx_module_t *module,
             if (OPAL_SUCCESS != status) {
                 OSC_UCX_VERBOSE(1, "opal_common_ucx_mem_putget failed: %d", status);
                 return OMPI_ERROR;
-            }
-            ret = incr_and_check_ops_num(module, target);
-            if (ret != OMPI_SUCCESS) {
-                return ret;
             }
 
             prev_len += target_ucx_iov[target_ucx_iov_idx].len;
@@ -394,7 +365,7 @@ int ompi_osc_ucx_put(const void *origin_addr, int origin_count, struct ompi_data
             OSC_UCX_VERBOSE(1, "opal_common_ucx_mem_putget failed: %d", ret);
             return OMPI_ERROR;
         }
-        return incr_and_check_ops_num(module, target);
+        return ret;
     } else {
         return ddt_put_get(module, origin_addr, origin_count, origin_dt, is_origin_contig,
                            origin_lb, target, remote_addr, target_count, target_dt,
@@ -450,7 +421,7 @@ int ompi_osc_ucx_get(void *origin_addr, int origin_count,
             return OMPI_ERROR;
         }
 
-        return incr_and_check_ops_num(module, target);
+        return ret;
     } else {
         return ddt_put_get(module, origin_addr, origin_count, origin_dt, is_origin_contig,
                            origin_lb, target, remote_addr, target_count, target_dt,
@@ -614,11 +585,6 @@ int ompi_osc_ucx_compare_and_swap(const void *origin_addr, const void *compare_a
         return ret;
     }
 
-    ret = incr_and_check_ops_num(module, target);
-    if (ret != OMPI_SUCCESS) {
-        return ret;
-    }
-
     return end_atomicity(module, target);
 }
 
@@ -666,11 +632,6 @@ int ompi_osc_ucx_fetch_and_op(const void *origin_addr, void *result_addr,
 
         ret = opal_common_ucx_wpmem_fetch(module->mem, opcode, value, target,
                                         (void *)origin_addr, dt_bytes, remote_addr);
-        if (ret != OMPI_SUCCESS) {
-            return ret;
-        }
-
-        ret = incr_and_check_ops_num(module, target);
         if (ret != OMPI_SUCCESS) {
             return ret;
         }
@@ -858,7 +819,7 @@ int ompi_osc_ucx_rput(const void *origin_addr, int origin_count,
 
     *request = &ucx_req->super;
 
-    return incr_and_check_ops_num(module, target);
+    return ret;
 }
 
 int ompi_osc_ucx_rget(void *origin_addr, int origin_count,
@@ -909,7 +870,7 @@ int ompi_osc_ucx_rget(void *origin_addr, int origin_count,
 
     *request = &ucx_req->super;
 
-    return incr_and_check_ops_num(module, target);
+    return ret;
 }
 
 int ompi_osc_ucx_raccumulate(const void *origin_addr, int origin_count,
