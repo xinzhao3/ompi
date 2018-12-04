@@ -55,7 +55,6 @@ typedef struct ompi_osc_ucx_epoch_type {
 #define TARGET_LOCK_EXCLUSIVE ((uint64_t)(0x0000000100000000ULL))
 
 #define OSC_UCX_IOVEC_MAX 128
-#define OSC_UCX_OPS_THRESHOLD 1000000
 
 #define OSC_UCX_STATE_LOCK_OFFSET 0
 #define OSC_UCX_STATE_REQ_FLAG_OFFSET sizeof(uint64_t)
@@ -110,8 +109,6 @@ typedef struct ompi_osc_ucx_module {
     opal_list_t pending_posts;
     int lock_count;
     int post_count;
-    int global_ops_num;
-    int *per_target_ops_nums;
     uint64_t req_result;
     int *start_grp_ranks;
     bool lock_all_is_nocheck;
