@@ -80,10 +80,6 @@ int ompi_osc_ucx_fence(int assert, struct ompi_win_t *win) {
         }
     }
 
-    module->global_ops_num = 0;
-    memset(module->per_target_ops_nums, 0,
-           sizeof(int) * ompi_comm_size(module->comm));
-
     return module->comm->c_coll->coll_barrier(module->comm,
                                               module->comm->c_coll->coll_barrier_module);
 }
@@ -176,10 +172,6 @@ int ompi_osc_ucx_complete(struct ompi_win_t *win) {
     if (ret != OMPI_SUCCESS) {
         return ret;
     }
-
-    module->global_ops_num = 0;
-    memset(module->per_target_ops_nums, 0,
-           sizeof(int) * ompi_comm_size(module->comm));
 
     size = ompi_group_size(module->start_group);
     for (i = 0; i < size; i++) {

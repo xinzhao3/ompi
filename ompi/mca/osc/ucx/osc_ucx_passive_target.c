@@ -166,9 +166,6 @@ int ompi_osc_ucx_unlock(int target, struct ompi_win_t *win) {
         return ret;
     }
 
-    module->global_ops_num -= module->per_target_ops_nums[target];
-    module->per_target_ops_nums[target] = 0;
-
     if (lock->is_nocheck == false) {
         if (lock->type == LOCK_EXCLUSIVE) {
             ret = end_exclusive(module, target);
@@ -183,7 +180,6 @@ int ompi_osc_ucx_unlock(int target, struct ompi_win_t *win) {
     assert(module->lock_count >= 0);
     if (module->lock_count == 0) {
         module->epoch_type.access = NONE_EPOCH;
-        assert(module->global_ops_num == 0);
     }
 
     return ret;
@@ -242,9 +238,6 @@ int ompi_osc_ucx_unlock_all(struct ompi_win_t *win) {
     WPOOL_DBG_OUT(dbg_level, "done flushing: mem = %p\n",
                   (void *)module->mem);
 
-    module->global_ops_num = 0;
-    memset(module->per_target_ops_nums, 0, sizeof(int) * comm_size);
-
     if (!module->lock_all_is_nocheck) {
         int i;
         for (i = 0; i < comm_size; i++) {
@@ -293,9 +286,6 @@ int ompi_osc_ucx_flush(int target, struct ompi_win_t *win) {
         return ret;
     }
 
-    module->global_ops_num -= module->per_target_ops_nums[target];
-    module->per_target_ops_nums[target] = 0;
-
     return OMPI_SUCCESS;
 }
 
@@ -312,10 +302,6 @@ int ompi_osc_ucx_flush_all(struct ompi_win_t *win) {
     if (ret != OMPI_SUCCESS) {
         return ret;
     }
-
-    module->global_ops_num = 0;
-    memset(module->per_target_ops_nums, 0,
-           sizeof(int) * ompi_comm_size(module->comm));
 
     return OMPI_SUCCESS;
 }

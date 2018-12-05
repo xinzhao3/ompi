@@ -396,8 +396,6 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
     module->post_group = NULL;
     OBJ_CONSTRUCT(&module->outstanding_locks, opal_hash_table_t);
     OBJ_CONSTRUCT(&module->pending_posts, opal_list_t);
-    module->global_ops_num = 0;
-    module->per_target_ops_nums = calloc(comm_size, sizeof(int));
     module->start_grp_ranks = NULL;
     module->lock_all_is_nocheck = false;
 
@@ -429,7 +427,6 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
  error:
     if (module->disp_units) free(module->disp_units);
     if (module->comm) ompi_comm_free(&module->comm);
-    if (module->per_target_ops_nums) free(module->per_target_ops_nums);
     if (module) {
         free(module);
         ompi_osc_ucx_unregister_progress();
@@ -558,7 +555,6 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
     WPOOL_DBG_OUT(dbg_level, "start, mem = %p lock flag = %d\n",
                   (void *)module->mem, (int)module->state.lock);
 
-    assert(module->global_ops_num == 0);
     assert(module->lock_count == 0);
     assert(opal_list_is_empty(&module->pending_posts) == true);
     OBJ_DESTRUCT(&module->outstanding_locks);
@@ -585,7 +581,6 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
 
     free(module->addrs);
     free(module->state_addrs);
-    free(module->per_target_ops_nums);
 
     ret = opal_common_ucx_wpmem_free(module->state_mem);
     if (ret != OMPI_SUCCESS) {
