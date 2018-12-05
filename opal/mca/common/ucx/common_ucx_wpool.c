@@ -1234,6 +1234,7 @@ opal_common_ucx_flush(ucp_ep_h ep, ucp_worker_h worker,
                       ucs_status_ptr_t *req_ptr)
 {
     ucs_status_ptr_t req;
+    ucs_status_t status = UCS_OK;
     int rc = OPAL_SUCCESS;
 
 #if HAVE_DECL_UCP_EP_FLUSH_NB
@@ -1252,7 +1253,6 @@ opal_common_ucx_flush(ucp_ep_h ep, ucp_worker_h worker,
     switch (type) {
     case OPAL_COMMON_UCX_FLUSH_NB_PREFERRED:
     case OPAL_COMMON_UCX_FLUSH_B:
-        ucs_status_t status = UCS_OK;
         if (scope == OPAL_COMMON_UCX_SCOPE_EP) {
             status = ucp_ep_flush(ep);
         } else {
