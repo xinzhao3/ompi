@@ -132,6 +132,18 @@ static void opal_common_ucx_mca_fence_complete_cb(int status, void *fenced)
     *(int*)fenced = 1;
 }
 
+OPAL_DECLSPEC int opal_common_ucx_mca_pmix_fence_nb(int *fenced)
+{
+    int ret = OPAL_SUCCESS;
+
+    if (OPAL_SUCCESS != (ret = opal_pmix.fence_nb(NULL, 0,
+                    opal_common_ucx_mca_fence_complete_cb, (void*)fenced))){
+        return ret;
+    }
+
+    return ret;
+}
+
 OPAL_DECLSPEC int opal_common_ucx_mca_pmix_fence(ucp_worker_h worker)
 {
     volatile int fenced = 0;
@@ -161,9 +173,8 @@ static void opal_common_ucx_wait_all_requests(void **reqs, int count, ucp_worker
     }
 }
 
-OPAL_DECLSPEC int opal_common_ucx_del_procs(opal_common_ucx_del_proc_t *procs, size_t count,
-                                            size_t my_rank, size_t max_disconnect, ucp_worker_h worker)
-{
+OPAL_DECLSPEC int opal_common_ucx_del_procs_nb(opal_common_ucx_del_proc_t *procs, size_t count,
+                                            size_t my_rank, size_t max_disconnect, ucp_worker_h worker) {
     size_t num_reqs;
     size_t max_reqs;
     void *dreq, **dreqs;
@@ -211,6 +222,14 @@ OPAL_DECLSPEC int opal_common_ucx_del_procs(opal_common_ucx_del_proc_t *procs, s
     opal_common_ucx_wait_all_requests(dreqs, num_reqs, worker);
     free(dreqs);
 
+    return OPAL_SUCCESS;
+}
+
+OPAL_DECLSPEC int opal_common_ucx_del_procs(opal_common_ucx_del_proc_t *procs, size_t count,
+                                            size_t my_rank, size_t max_disconnect, ucp_worker_h worker)
+{
+    int ret = OPAL_SUCCESS;
+    opal_common_ucx_del_procs_nb(procs, count, my_rank, max_disconnect, worker);
     if (OPAL_SUCCESS != (ret = opal_common_ucx_mca_pmix_fence(worker))) {
         return ret;
     }
